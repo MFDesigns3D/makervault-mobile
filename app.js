@@ -770,7 +770,7 @@
             joinPart.replaceChildren(
               h("div", { text: "Found: started by " + (starter ? starter.name : "your laptop") + " · " + plural(devices.length, "device") }),
               h("label", { class: "field", style: "margin-top:10px" }, h("span", { text: "Name this phone" }), name), use);
-          } catch (e) { joinPart.textContent = e.message; }
+          } catch (e) { joinPart.textContent = e.message; if (!Drive.signedIn()) draw(); }
         })();
       }
       steps.replaceChildren(
