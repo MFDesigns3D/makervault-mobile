@@ -505,15 +505,15 @@
     const data = await loadFilament(true);
     let pick = null;
     const list = h("div", { class: "rows" });
-    const addOne = h("input", { type: "checkbox", checked: true });
-    const remember = h("button", { class: "btn primary wide", disabled: true }, "Remember this barcode");
+    const addOne = h("input", { type: "checkbox", checked: !/^NFC:/.test(code) });
+    const remember = h("button", { class: "btn primary wide", disabled: true, style: "position:sticky;bottom:72px;z-index:5;box-shadow:0 -8px 16px rgba(0,0,0,.45)" }, "Remember this barcode");
     let words = [];
     function draw() {
       const shown = data.filaments.filter(f => matches(f, words)).slice(0, 80);
       list.replaceChildren(...shown.map(f => {
         const radio = h("input", { type: "radio", name: "pick", checked: pick === f.id, "aria-label": f.name });
         const row = h("label", { class: "frow" + (pick === f.id ? " on" : "") }, radio, swatch(f.hex), h("span", { class: "mid" }, h("span", { class: "n", text: f.name }), h("span", { class: "s", text: rollsText(f) })));
-        radio.addEventListener("change", () => { pick = f.id; remember.disabled = false; draw(); });
+        radio.addEventListener("change", () => { pick = f.id; remember.disabled = false; remember.textContent = (/^NFC:/.test(code) ? "Remember this tag: " : "Remember: ") + f.name; draw(); });
         return row;
       }));
       if (!shown.length) list.replaceChildren(h("div", { class: "muted", text: "No filament matches. Try fewer words, or add it as new." }));
