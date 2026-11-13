@@ -277,7 +277,7 @@
         h("label", { class: "field" }, h("span", { text: "Notes" }), notes),
         h("div", { class: "btns" },
           h("button", { class: "btn ghost", onclick: () => go("#/filament/" + f.id + "/label") }, "QR label"),
-          h("button", { class: "btn ghost", onclick: () => go("#/filament/" + f.id + "/barcodes") }, "Barcodes (" + data.barcodes.length + ")"),
+          h("button", { class: "btn ghost", onclick: () => go("#/filament/" + f.id + "/barcodes") }, "Barcodes & tags (" + data.barcodes.length + ")"),
           h("button", { class: "btn ghost", onclick: () => go("#/filament/" + f.id + "/nfc") }, "NFC tag")),
         h("div", { class: "note small", style: "margin-top:14px", text: "To change the name, brand or colour, use Edit on the laptop." }));
     }
@@ -288,13 +288,13 @@
     const data = await api("/api/filament/" + id);
     const f = data.filament;
     const list = h("div", { class: "rows" }, data.barcodes.map(code => h("div", { class: "frow" },
-      h("span", { class: "mid" }, h("span", { class: "n", text: code })),
+      h("span", { class: "mid" }, h("span", { class: "n", text: /^NFC:/.test(code) ? "NFC tag " + code.slice(4) : code })),
       h("button", { class: "btn danger", style: "flex:0 0 auto", onclick: async () => {
-        if (!confirm("Forget this barcode? The filament stays in your list.")) return;
+        if (!confirm(/^NFC:/.test(code) ? "Forget this NFC tag? The filament stays in your list. Tap the tag again to put it on another roll." : "Forget this barcode? The filament stays in your list.")) return;
         try { await api("/api/barcode/forget", { code }); render(); } catch (e) { toast(e.message, true); }
       } }, "Forget"))));
-    screen(header("Barcodes", f.name, { back: "#/filament/" + id }), h("main", null,
-      h("div", { class: "note", text: "Barcodes you taught MakerVault for this filament (for example the code on its box). Scan one to jump straight here." }),
+    screen(header("Barcodes & tags", f.name, { back: "#/filament/" + id }), h("main", null,
+      h("div", { class: "note", text: "Barcodes and NFC tags you taught MakerVault for this filament. Forget one to reuse it: tap or scan it again and pick a different roll." }),
       data.barcodes.length ? list : h("div", { class: "muted", text: "None yet. Scan a box's barcode to add one." }),
       h("button", { class: "btn primary wide", style: "margin-top:14px", onclick: () => go("#/scan") }, "Scan a barcode")), tabs("filament"));
   }
