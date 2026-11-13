@@ -770,7 +770,14 @@
             joinPart.replaceChildren(
               h("div", { text: "Found: started by " + (starter ? starter.name : "your laptop") + " · " + plural(devices.length, "device") }),
               h("label", { class: "field", style: "margin-top:10px" }, h("span", { text: "Name this phone" }), name), use);
-          } catch (e) { joinPart.textContent = e.message; if (!Drive.signedIn()) draw(); }
+          } catch (e) {
+            if (!e.signIn) { joinPart.textContent = e.message; return; }
+            const again = h("button", { class: "btn primary wide", style: "margin-top:10px", onclick: async () => {
+              again.disabled = true;
+              try { localStorage.removeItem("mv.consent"); await Drive.ready(true); draw(); } catch (x) { status.className = "note warn"; status.textContent = x.message; again.disabled = false; }
+            } }, "Sign in with Google");
+            joinPart.replaceChildren(h("div", { text: e.message }), again);
+          }
         })();
       }
       steps.replaceChildren(
