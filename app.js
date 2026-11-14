@@ -34,6 +34,9 @@
     tag: "M6 8a8 8 0 0 1 0 8 M10 6a11 11 0 0 1 0 12 M14 4a14 14 0 0 1 0 16", log: "M6 3h9l4 4v14H6z M9 11h7 M9 15h7 M9 7h3",
     light: "M9 2h6l-1 7h3l-6 13 1-9H8z",
   };
+  // Bambu Lab spools carry MIFARE Classic tags: Android reports a 4-byte serial number (8 hex digits, "aa:bb:cc:dd").
+  // Our own NTAG stickers report 7 bytes. So a 4-byte serial is almost always a Bambu spool.
+  function bambuTag(code) { const hex = String(code).replace(/^NFC:/i, "").replace(/[^0-9a-f]/gi, ""); return hex.length === 8; }
   function icon(name, color, width) {
     const ns = "http://www.w3.org/2000/svg";
     const svg = document.createElementNS(ns, "svg");
@@ -288,7 +291,7 @@
     const data = await api("/api/filament/" + id);
     const f = data.filament;
     const list = h("div", { class: "rows" }, data.barcodes.map(code => h("div", { class: "frow" },
-      h("span", { class: "mid" }, h("span", { class: "n", text: /^NFC:/.test(code) ? "NFC tag " + code.slice(4) : code })),
+      h("span", { class: "mid" }, h("span", { class: "n", text: /^NFC:/.test(code) ? (bambuTag(code) ? "Bambu spool tag " : "NFC tag ") + code.slice(4) : code })),
       h("button", { class: "btn danger", style: "flex:0 0 auto", onclick: async () => {
         if (!confirm(/^NFC:/.test(code) ? "Forget this NFC tag? The filament stays in your list. Tap the tag again to put it on another roll." : "Forget this barcode? The filament stays in your list.")) return;
         try { await api("/api/barcode/forget", { code }); render(); } catch (e) { toast(e.message, true); }
@@ -501,11 +504,11 @@
         h("div", { style: "height:10px" }), typed,
         h("div", { class: "note small", style: "margin-top:14px", text: "The picture is read here on the phone and isn't saved or sent anywhere. Tip: the live camera (Scan) doesn't take a picture at all." })), tabs("scan"));
   }
-  async function learnScreen(code) {
+  async function learnScreen(code, move) {
     const data = await loadFilament(true);
     let pick = null;
     const list = h("div", { class: "rows" });
-    const addOne = h("input", { type: "checkbox", checked: !/^NFC:/.test(code) });
+    const addOne = h("input", { type: "checkbox", checked: !move && !/^NFC:/.test(code) });
     const remember = h("button", { class: "btn primary wide", disabled: true, style: "position:sticky;bottom:72px;z-index:5;box-shadow:0 -8px 16px rgba(0,0,0,.45)" }, "Remember this barcode");
     let words = [];
     function draw() {
@@ -523,16 +526,18 @@
       try {
         const r = await api("/api/barcode", { code, filamentId: pick, addUnopened: addOne.checked });
         replaceFilament(r.filament);
-        toast(/^NFC:/.test(code) ? "Tag remembered" : "Barcode remembered");
+        toast(move ? "Tag moved" : /^NFC:/.test(code) ? "Tag remembered" : "Barcode remembered");
         history.replaceState(null, "", "#/filament/" + r.filament.id); render();
       } catch (e) { remember.disabled = false; if (e.status !== 401) toast(e.message, true); }
     });
     draw();
     const tag = /^NFC:/.test(code);
-    if (tag) remember.textContent = "Remember this tag";
-    screen(header(tag ? "New NFC tag" : "New barcode", (tag ? "Tag " + code.slice(4) : code) + " · not known yet", { back: tag ? "#/filament" : "#/scan" }),
+    if (tag) remember.textContent = move ? "Move the tag here" : "Remember this tag";
+    screen(header(move ? "Move this tag" : tag ? "New NFC tag" : "New barcode", (tag ? "Tag " + code.slice(4) : code) + (move ? " · pick its new roll" : " · not known yet"), { back: tag ? "#/nfc" : "#/scan" }),
       h("main", null,
-        h("div", { class: "note blue", text: tag
+        h("div", { class: "note blue", text: move
+          ? "Pick the roll this tag is on now. From then on, tapping it opens that roll. Nothing else changes."
+          : tag
           ? "Which roll is this tag on? Pick its filament once and MakerVault remembers the tag. Next time, tapping it opens the filament straight away."
           : "Which filament is this box? Pick it once and MakerVault remembers the barcode. Next time, scanning it finds the filament straight away." }),
         searchBox("Search: brand, material, colour…", "", v => { words = v.toLowerCase().split(/\s+/).filter(Boolean); draw(); }),
@@ -950,11 +955,12 @@
         card.replaceChildren(h("div", { class: "box", style: "border-color:var(--blue)" },
           h("div", { style: "display:flex;align-items:center;gap:12px" }, swatch(f.hex, "big"),
             h("div", { style: "flex:1;min-width:0" }, h("div", { style: "font-weight:600;font-size:15px", text: f.name + " " + f.material }),
-              h("div", { class: "muted small", text: (first ? "open roll · " + (first.percent === null ? "?" : first.percent + "%") + " left" : f.unopened + " unopened") + " · tag " + code })),
+              h("div", { class: "muted small", text: (first ? "open roll · " + (first.percent === null ? "?" : first.percent + "%") + " left" : f.unopened + " unopened") + " · " + (bambuTag(code) ? "Bambu spool tag" : "tag " + code) })),
             h("span", { class: "pill ok", text: "Just read" })),
           h("div", { class: "btns", style: "margin-top:12px" },
             h("button", { class: "btn primary", onclick: () => { stopNfc(); go("#/filament/" + f.id); } }, "Open roll"),
-            first ? h("button", { class: "btn", onclick: () => percentSheet("How much is left?", first.percent, v => change(f.id, "/roll/" + first.id, { percent: v }, () => shown(code))) }, "Set % left") : null)));
+            first ? h("button", { class: "btn", onclick: () => percentSheet("How much is left?", first.percent, v => change(f.id, "/roll/" + first.id, { percent: v }, () => shown(code))) }, "Set % left") : null),
+          /^NFC:/.test(lookupCode) && r.via === "barcode" ? h("button", { class: "btn ghost wide", style: "margin-top:8px", onclick: () => { stopNfc(); go("#/learn/" + encodeURIComponent(lookupCode) + "/move"); } }, "Move this tag to another roll") : null));
         if (!keep.checked) stopNfc();
       } catch (e) { toast(e.message, true); }
     }
@@ -1131,7 +1137,7 @@
       else if (a === "add") await addScreen(b || "");
       else if (a === "scan") await liveScanScreen();
       else if (a === "scan-photo") await scanScreen();
-      else if (a === "learn" && b) await learnScreen(b);
+      else if (a === "learn" && b) await learnScreen(b, c === "move");
       else if (a === "more") await moreScreen();
       else await homeScreen();
     } catch (e) {
