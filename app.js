@@ -867,7 +867,7 @@
         sheet.className = "livesheet";
         sheet.replaceChildren(
           h("div", { style: "display:flex;align-items:center;gap:10px" }, label.hex ? swatch(label.hex) : icon(drawer ? "supplies" : "scan", "#8CC4FF"),
-            h("div", { style: "flex:1;min-width:0" }, h("div", { style: "font-size:17px;font-weight:600", text: label.name }), label.sub ? h("div", { class: "muted small", text: label.sub }) : null),
+            h("div", { style: "flex:1;min-width:0" }, h("div", { class: "mid-name", style: "font-size:17px;font-weight:600", text: label.name }), label.sub ? h("div", { class: "muted small", text: label.sub }) : null),
             h("span", { class: "pill ok", text: r.found || drawer ? "Found" : "New" })),
           h("div", { class: "btns", style: "margin-top:12px" },
             label.go ? h("button", { class: "btn primary", onclick: () => { stopCamera(); go(label.go); } }, drawer ? "Open drawer" : r.found ? "Open it" : "Teach it") : null,

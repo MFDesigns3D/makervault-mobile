@@ -202,3 +202,5 @@ a { color: var(--blue-text); }
 .logline select { flex: 1; min-width: 0; }
 select.text { width: 100%; min-height: 46px; border-radius: 10px; border: 1px solid var(--field); background: var(--bg); padding: 0 10px; }
 .frow svg { width: 22px; height: 22px; flex-shrink: 0; color: var(--blue-text); }
+.livesheet svg { width: 32px; height: 32px; flex: 0 0 32px; }
+.livesheet .mid-name { overflow-wrap: anywhere; }
