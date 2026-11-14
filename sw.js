@@ -1,7 +1,7 @@
 // MakerVault Mobile offline support: the app's own files are kept on the phone, so it opens with no connection.
 // Google sign-in and Google Drive always go to the network (never stored here).
-const CACHE = "makervault-mobile-v8";
-const FILES = ["./", "index.html", "app.css", "config.js", "sync-tables.js", "engine.js", "store.js", "drive.js", "app.js", "zxing.min.js", "manifest.webmanifest", "icon-192.png", "icon-512.png"];
+const CACHE = "makervault-mobile-v9";
+const FILES = ["./", "index.html", "app.css", "config.js", "sync-tables.js", "engine.js", "store.js", "drive.js", "app.js", "zxing.min.js", "manifest.webmanifest", "icon-192.png", "icon-512.png", "home.html", "privacy.html", "site.css"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 self.addEventListener("fetch", e => {

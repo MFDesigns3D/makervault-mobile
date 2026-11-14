@@ -1103,7 +1103,8 @@
           if (!confirm("Set up MakerVault Mobile again? Changes not yet sent are lost; everything already synced stays in your Google Drive.")) return;
           store = E.emptyStore(); await saveNow(); location.hash = "#/setup"; render();
         } }, "Set up again"),
-        h("div", { class: "muted small", style: "margin-top:18px", text: "MakerVault Mobile (Stage 12). Barcode reading uses ZXing (Apache 2.0). The home Wi-Fi phone page from the laptop (Phone in the sidebar) still works too." })), tabs("more"));
+        h("div", { class: "muted small", style: "margin-top:18px", text: "MakerVault Mobile (Stage 12). Barcode reading uses ZXing (Apache 2.0). The home Wi-Fi phone page from the laptop (Phone in the sidebar) still works too." }),
+        h("div", { class: "small", style: "margin-top:10px" }, h("a", { href: "privacy.html", style: "color:var(--blue-text)", text: "Privacy policy" }), h("span", { class: "muted", text: "  ·  " }), h("a", { href: "home.html", style: "color:var(--blue-text)", text: "About MakerVault" }))), tabs("more"));
   }
 
   // ------------------------------------------------------------------ routing
