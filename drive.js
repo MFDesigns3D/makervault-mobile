@@ -123,6 +123,7 @@
       const t = saved();
       sessionStorage.removeItem(KEY);
       localStorage.removeItem(CONSENT);
+      Drive.email = null; // the address stays only as a hint for the next sign-in
       if (t) { try { await fetch("https://oauth2.googleapis.com/revoke?token=" + encodeURIComponent(t.token), { method: "POST" }); } catch (e) { } }
     },
   };

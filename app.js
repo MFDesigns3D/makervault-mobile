@@ -1078,14 +1078,16 @@
     const conflicts = Object.values(store.conflicts || {}).filter(c => !c.resolved).length;
     const last = store.state.lastSyncUtc ? new Date(store.state.lastSyncUtc).toLocaleString() : "not yet";
     const recent = (store.recent || []).slice(0, 8);
+    const signedIn = Drive.signedIn();
     screen(header("More", store.state.deviceName || ""),
       h("main", null,
         h("div", { class: "box" }, h("h2", { text: "Sync" }),
-          h("div", { text: "Last synced " + last + (Drive.email ? " · " + Drive.email : "") }),
+          signedIn ? null : h("div", { class: "note warn", style: "margin:0 0 10px", text: "Signed out of Google. Your library stays on this phone and syncs again when you sign in." }),
+          h("div", { text: "Last synced " + last + (signedIn && Drive.email ? " · " + Drive.email : "") }),
           h("div", { class: "muted small", style: "margin-top:4px", text: "“" + folderName() + "” in your Google Drive. Changes made here wait on the phone when it's offline and go out when it's back." }),
           sync.message ? h("div", { class: "note warn", style: "margin:10px 0 0", text: sync.message }) : null,
           conflicts ? h("div", { class: "note warn", style: "margin:10px 0 0", text: plural(conflicts, "thing") + " to check: open MakerVault on the laptop › Sync › Check changes." }) : null,
-          h("button", { class: "btn primary wide", style: "margin-top:12px", onclick: async () => { await runSync(true); render(); } }, "Sync now")),
+          h("button", { class: "btn primary wide", style: "margin-top:12px", onclick: async () => { await runSync(true); render(); } }, signedIn ? "Sync now" : "Sign in with Google")),
         recent.length ? h("div", { class: "box" }, h("h2", { text: "Recent changes from other devices" }), ...recent.map(r => h("div", { class: "s", style: "padding:4px 0" }, h("span", { style: "color:var(--blue-text)", text: r.device + "  " }), r.text))) : null,
         h("div", { class: "rows" },
           h("button", { class: "frow", onclick: () => go("#/projects") }, icon("projects"), h("span", { class: "mid" }, h("span", { class: "n", text: "Projects" }), h("span", { class: "s", text: "Read only · open files on the computers" }))),
@@ -1094,10 +1096,10 @@
           h("button", { class: "frow", onclick: () => go("#/nfc-blank") }, icon("tag"), h("span", { class: "mid" }, h("span", { class: "n", text: "Set up blank NFC tags" })))),
         h("div", { class: "box", style: "margin-top:14px" }, h("h2", { text: "Install" }),
           h("div", { class: "muted", text: "Android (Chrome): ⋮ › Add to Home screen or Install app. iPhone (Safari): Share › Add to Home Screen. It opens full screen with its own icon." })),
-        h("button", { class: "btn ghost wide", onclick: async () => {
+        signedIn ? h("button", { class: "btn ghost wide", onclick: async () => {
           if (!confirm("Sign out of Google on this phone? Its copy of the library stays until you set it up again.")) return;
-          await Drive.signOut(); setSync("signin"); render();
-        } }, "Sign out of Google"),
+          await Drive.signOut(); setSync("signin"); toast("Signed out of Google"); render();
+        } }, "Sign out of Google") : null,
         h("div", { style: "height:10px" }),
         h("button", { class: "btn ghost danger wide", onclick: async () => {
           if (!confirm("Set up MakerVault Mobile again? Changes not yet sent are lost; everything already synced stays in your Google Drive.")) return;
