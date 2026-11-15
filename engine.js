@@ -157,7 +157,14 @@
   function display(store, t, row) {
     const V = c => row[c] == null ? "" : row[c];
     const fil = id => { const f = table(store, "filaments")[id]; return f ? [f.brand, f.colour, f.material].filter(Boolean).join(" ") : "A filament"; };
+    const sup = (id, name) => {
+      const x = table(store, "supplies")[id]; name = name || (x && x.name); if (!name) return "A supply";
+      const m = (table(store, "supply_makers") || {})[id] || {};
+      return [m.maker, m.model].map(p => (p || "").trim()).filter(p => p && !name.trim().toLowerCase().startsWith(p.toLowerCase())).concat([name.trim()]).join(" ");
+    };
     switch (t.name) {
+      case "supplies": return sup(row.id, row.name);
+      case "supply_barcodes": case "supply_makers": return sup(row.supply_id);
       case "filaments": return [V("brand"), V("colour"), V("material")].filter(Boolean).join(" ");
       case "filament_open_rolls": return fil(row.filament_id) + " · open roll";
       case "filament_barcodes": case "filament_roll_grams": return fil(row.filament_id);
@@ -177,9 +184,10 @@
     const old = op.old || {}, N = s => parseInt(s, 10) || 0;
     if (t.name === "supplies" && op.op === "upd" && "quantity" in old) {
       const d = N(op.row.quantity) - N(old.quantity); const dr = table(store, "supply_drawers")[row.drawer_id];
-      return (d < 0 ? "Used " + (-d) : "Added " + d) + " × " + row.name + (dr ? " · " + dr.name : "");
+      return (d < 0 ? "Used " + (-d) : "Added " + d) + " × " + display(store, t, row) + (dr ? " · " + dr.name : "");
     }
     if (t.name === "filament_open_rolls" && op.op === "upd" && "percent_left" in old) return display(store, BY_NAME.filament_open_rolls, row).replace(" · open roll", "") + ": open roll set to " + (N(row.percent_left) < 0 ? "?" : row.percent_left + "%");
+    if (t.name === "supply_barcodes" && op.op === "put") return "Barcode remembered for " + display(store, t, row);
     if (t.name === "print_jobs" && op.op === "put") { const m = table(store, "machines")[row.machine_id]; return "Logged print: " + row.title + (N(row.copies) > 1 ? " ×" + row.copies : "") + (m ? " on " + m.name : ""); }
     if (t.name === "projects" && op.op === "upd" && "status" in old) return "Project “" + row.name + "” → " + ({ "Not Produced": "Not made yet", "In Progress": "In progress", Completed: "Done", "Needs Attention": "Needs attention" })[row.status];
     if (["filaments", "filament_open_rolls", "supplies", "supply_drawers", "machines", "projects", "to_print", "maintenance_tasks"].includes(t.name))

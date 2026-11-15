@@ -60,7 +60,8 @@
   const fail = (status, message, data) => { throw new ApiError(status, message, data); };
 
   function createApi(getStore, changed, info) {
-    const T = name => getStore().tables[name];
+    // A phone set up before Stage 14 has no table yet for supply barcodes / makers: start them empty.
+    const T = name => { const st = getStore(); return st.tables[name] || (st.tables[name] = {}); };
     const rollGrams = id => { const r = T("filament_roll_grams")[id]; return r ? int(r.grams) : DEFAULT_ROLL_GRAMS; };
 
     function filament(row) {
@@ -74,9 +75,14 @@
       };
     }
     const filaments = () => Object.values(T("filaments")).sort((a, b) => (a.name_key < b.name_key ? -1 : 1)).map(filament);
+    // Stage 14: "name" is the full name (maker + model + name, e.g. "Bambu Lab H2C Hotend 0.4 mm"); baseName is the item's own name.
+    const fullName = (maker, model, name) => [maker, model].map(p => clean(p)).filter(p => p && !clean(name).toLowerCase().startsWith(p.toLowerCase())).concat([clean(name)]).filter(Boolean).join(" ");
     const supply = x => {
       const q = int(x.quantity), w = int(x.warn_below);
-      return { id: x.id, drawer: x.drawer_id, name: x.name, category: x.category, size: x.size || "", quantity: q, warnBelow: w, low: w > 0 && q < w, out: q === 0, notes: x.notes || "", buyUrl: x.buy_url || "" };
+      const m = T("supply_makers")[x.id] || {};
+      const dr = x.drawer_id && T("supply_drawers")[x.drawer_id];
+      return { id: x.id, drawer: x.drawer_id, drawerName: dr ? dr.name : "", name: fullName(m.maker, m.model, x.name), baseName: x.name, maker: m.maker || "", model: m.model || "",
+        category: x.category, size: x.size || "", quantity: q, warnBelow: w, low: w > 0 && q < w, out: q === 0, notes: x.notes || "", buyUrl: x.buy_url || "" };
     };
     const supplies = () => Object.values(T("supplies")).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })).map(supply);
     const drawers = () => Object.values(T("supply_drawers")).sort((a, b) => int(a.position) - int(b.position) || a.name.localeCompare(b.name));
@@ -169,7 +175,63 @@
       if (/^MVF1:/i.test(c)) return { found: false, label: true, code: c, message: "This MakerVault label can't be read. Print a new one on the laptop." };
       const known = T("filament_barcodes")[c];
       const row = known && T("filaments")[known.filament_id];
-      return row ? { found: true, via: "barcode", code: c, filament: filament(row) } : { found: false, label: false, code: c };
+      if (row) return { found: true, via: "barcode", kind: "filament", code: c, filament: filament(row) };
+      const sb = T("supply_barcodes")[c];
+      const item = sb && T("supplies")[sb.supply_id];
+      return item ? { found: true, via: "barcode", kind: "supply", code: c, supply: supply(item) } : { found: false, label: false, code: c };
+    }
+
+    // Stage 14: barcodes for supplies.
+    const SUPPLY_CATEGORIES = ["Magnets", "Bearings", "Hotends & nozzles", "Fasteners", "Replacement parts", "Electronics", "Maintenance", "Packaging", "Other"];
+    function ownLabel(c) {
+      if (/^MVF1:/i.test(c)) return "That is a MakerVault filament label; it already points at its filament.";
+      if (/^MVD1:/i.test(c)) return "That is a MakerVault drawer label; it already opens its drawer.";
+      return null;
+    }
+    function setSupplyBarcode(code, supplyId) {
+      const c = cleanCode(code);
+      if (!c) fail(400, "A barcode must be 1 to 200 characters.");
+      const own = ownLabel(c); if (own) fail(400, own);
+      if (!T("supplies")[supplyId]) fail(404, "That item is not in your supplies any more.");
+      const old = T("supply_barcodes")[c];
+      if (old && old.supply_id === supplyId) return;
+      if (Object.values(T("supply_barcodes")).filter(b => b.supply_id === supplyId).length >= 20) fail(400, "Up to 20 barcodes per item.");
+      delete T("filament_barcodes")[c];
+      T("supply_barcodes")[c] = { code: c, supply_id: supplyId, added_utc: now(), added_by: clean(((info && info()) || {}).phone || "Phone").slice(0, 80) };
+      changed("supplies");
+    }
+    function supplyBarcodes(id) {
+      return Object.values(T("supply_barcodes")).filter(b => b.supply_id === id).sort((a, b) => (a.added_utc < b.added_utc ? -1 : 1)).map(b => ({ code: b.code, addedBy: b.added_by || "", added: b.added_utc }));
+    }
+    function saveSupply(body, id) {
+      const name = clean(body.name).slice(0, 100);
+      if (!name) fail(400, "Give the item a name (up to 100 characters).");
+      const maker = clean(body.maker), model = clean(body.model), size = clean(body.size), notes = (body.notes || "").trim(), buy = clean(body.buyUrl);
+      if (maker.length > 60 || model.length > 60) fail(400, "Maker and model: up to 60 characters each.");
+      if (size.length > 60 || notes.length > 2000) fail(400, "That's too long.");
+      const quantity = body.quantity == null ? 0 : int(body.quantity), warn = body.warnBelow == null ? 0 : int(body.warnBelow);
+      if (quantity < 0 || quantity > 1000000 || String(body.quantity == null ? 0 : body.quantity).trim() === "") fail(400, "How many: 0 to 1,000,000.");
+      if (warn < 0 || warn > 1000000) fail(400, "Warn below: 0 to 1,000,000.");
+      let link = buy;
+      if (link && !/^[a-z]+:\/\//i.test(link)) link = "https://" + link;
+      if (link && !/^https?:\/\/[^\s]+$/i.test(link)) fail(400, "The shop link must start with https://");
+      if (link.length > 1000) fail(400, "The shop link is too long.");
+      const category = clean(body.category).slice(0, 40) || "Other";
+      const drawer = body.drawer && T("supply_drawers")[body.drawer] ? body.drawer : null;
+      const t = now();
+      if (!id) {
+        if (Object.keys(T("supplies")).length >= 20000) fail(400, "Up to 20,000 items.");
+        id = E.newId();
+        T("supplies")[id] = { id, drawer_id: drawer, name, category, size, quantity: String(quantity), warn_below: String(warn), buy_url: link, notes, created_utc: t, updated_utc: t };
+      } else {
+        const x = T("supplies")[id];
+        if (!x) fail(404, "That item is not in your supplies any more.");
+        Object.assign(x, { drawer_id: drawer, name, category, size, warn_below: String(warn), buy_url: link, notes, updated_utc: t });
+      }
+      if (maker || model) T("supply_makers")[id] = { supply_id: id, maker, model };
+      else delete T("supply_makers")[id];
+      changed("supplies");
+      return id;
     }
 
     function setBarcode(code, filamentId) {
@@ -179,6 +241,7 @@
       if (!T("filaments")[filamentId]) fail(404, "That filament is not in your list any more.");
       const old = T("filament_barcodes")[c];
       if (old && old.filament_id === filamentId) return;
+      delete T("supply_barcodes")[c]; // one code points at one thing
       T("filament_barcodes")[c] = { code: c, filament_id: filamentId, added_utc: now() };
       changed("filament");
     }
@@ -231,7 +294,7 @@
           status: label(p.status), notMade: p.status === "Not Produced", favorite: p.favorite === "1", demo: p.is_demo === "1",
           tags: ptags.filter(x => x.project_id === p.id).sort((a, b) => int(a.position) - int(b.position)).map(x => tagNames[x.tag_id]).filter(Boolean).slice(0, 8),
           groups: members.filter(m => m.project_id === p.id).map(m => m.group_id), files: 0, cover: null, words: "",
-          notes: p.notes, designer: p.designer, source: p.source, statusRaw: p.status,
+          notes: p.notes, designer: p.designer, source: p.source, statusRaw: p.status, updated: p.updated_utc,
         })),
         groups: groups.map(g => ({ id: g.id, name: g.name, color: g.color, count: members.filter(m => m.group_id === g.id).length })),
       };
@@ -272,6 +335,31 @@
       }
       if (a === "barcode" && s[1] === "forget" && post) { const c = cleanCode(body.code); if (c && T("filament_barcodes")[c]) { delete T("filament_barcodes")[c]; changed("filament"); } return { done: true }; }
       if (a === "supplies" && !post) { const items = supplies(); return { drawers: drawers().map(d => ({ id: d.id, name: d.name, note: d.note || "", count: items.filter(i => i.drawer === d.id).length })), items, low: items.filter(i => i.low || i.out).length }; }
+      if (a === "supply-barcode" && post && s.length === 1) {
+        setSupplyBarcode(body.code, body.supplyId);
+        const x = T("supplies")[body.supplyId];
+        if (body.addOne) { x.quantity = String(Math.min(1000000, int(x.quantity) + 1)); x.updated_utc = now(); changed("supplies"); }
+        return { supply: supply(x) };
+      }
+      if (a === "supply-barcode" && s[1] === "forget" && post) { const c = cleanCode(body.code); if (c && T("supply_barcodes")[c]) { delete T("supply_barcodes")[c]; changed("supplies"); } return { done: true }; }
+      if (a === "supply" && s.length === 1 && post) {
+        if (body.barcode) { const c = cleanCode(body.barcode); if (!c) fail(400, "A barcode must be 1 to 200 characters."); const own = ownLabel(c); if (own) fail(400, own); }
+        const id = saveSupply(body, null);
+        if (body.barcode) setSupplyBarcode(body.barcode, id);
+        return { supply: supply(T("supplies")[id]) };
+      }
+      if (a === "supply" && s.length === 2 && !post) {
+        const x = T("supplies")[s[1]];
+        if (!x) fail(404, "That item is not in your supplies any more.");
+        return { supply: supply(x), barcodes: supplyBarcodes(x.id), drawers: drawers().map(d => ({ id: d.id, name: d.name })), categories: SUPPLY_CATEGORIES };
+      }
+      if (a === "supply" && s.length === 2 && post) { const id = saveSupply(body, s[1]); return { supply: supply(T("supplies")[id]) }; }
+      if (a === "supply-choices" && !post) {
+        const cats = [...new Set(Object.values(T("supplies")).map(x => x.category).filter(Boolean).concat(SUPPLY_CATEGORIES))];
+        const makers = [...new Set(Object.values(T("supply_makers")).map(m => m.maker).filter(Boolean).concat(["Bambu Lab", "Snapmaker", "Prusa", "Creality", "E3D"]))];
+        const models = [...new Set(Object.values(T("supply_makers")).map(m => m.model).filter(Boolean))];
+        return { drawers: drawers().map(d => ({ id: d.id, name: d.name })), categories: cats, makers, models };
+      }
       if (a === "toprint" && !post) return toPrint();
       if (a === "machines" && !post) return { machines: Object.values(T("machines")).sort((x, y) => int(x.position) - int(y.position)).map(m => ({ id: m.id, name: m.name, kind: m.kind })) };
       if (a === "supply" && s[2] === "quantity" && post) {

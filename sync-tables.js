@@ -817,6 +817,98 @@ self.MV_TABLES = [
     ]
   },
   {
+    "name": "supply_makers",
+    "group": "supplies",
+    "label": "Maker and model",
+    "key": [
+      "supply_id"
+    ],
+    "natural": null,
+    "columns": [
+      {
+        "name": "supply_id",
+        "rule": "ask",
+        "ref": "supplies",
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "maker",
+        "rule": "ask",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "model",
+        "rule": "ask",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      }
+    ]
+  },
+  {
+    "name": "supply_barcodes",
+    "group": "supplies",
+    "label": "Supply barcode",
+    "key": [
+      "code"
+    ],
+    "natural": null,
+    "columns": [
+      {
+        "name": "code",
+        "rule": "ask",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "supply_id",
+        "rule": "ask",
+        "ref": "supplies",
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "added_utc",
+        "rule": "quiet",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "added_by",
+        "rule": "quiet",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      }
+    ]
+  },
+  {
     "name": "machines",
     "group": "machines",
     "label": "Machine",

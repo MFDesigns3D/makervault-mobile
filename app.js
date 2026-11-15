@@ -33,6 +33,7 @@
     home: "M4 5h16v14H4z M4 10h16", supplies: "M3 7l9-4 9 4v10l-9 4-9-4z M3 7l9 4 9-4 M12 11v10",
     tag: "M6 8a8 8 0 0 1 0 8 M10 6a11 11 0 0 1 0 12 M14 4a14 14 0 0 1 0 16", log: "M6 3h9l4 4v14H6z M9 11h7 M9 15h7 M9 7h3",
     light: "M9 2h6l-1 7h3l-6 13 1-9H8z",
+    grid: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z", list: "M8 6h12 M8 12h12 M8 18h12 M4 6h.01 M4 12h.01 M4 18h.01",
   };
   // Bambu Lab spools carry MIFARE Classic tags: Android reports a 4-byte serial number (8 hex digits, "aa:bb:cc:dd").
   // Our own NTAG stickers report 7 bytes. So a 4-byte serial is almost always a Bambu spool.
@@ -55,6 +56,9 @@
     clearTimeout(toastTimer); toastTimer = setTimeout(() => t.remove(), bad ? 4500 : 2200);
   }
   function go(hash) { if (location.hash === hash) render(); else location.hash = hash; }
+  // Stage 14: the supply barcode screens (shared with the home Wi-Fi phone page).
+  let supplyScreens = null;
+  const SUP = () => supplyScreens || (supplyScreens = window.MVSupplyScreens({ h, api, go, screen, header, tabs, toast, searchBox, plural, render }));
 
   class ApiError extends Error { constructor(status, message, data) { super(message); this.status = status; this.data = data; } }
   let localApi = null;
@@ -144,8 +148,8 @@
       if (!shown.length) list.replaceChildren(h("div", { class: "muted", style: "grid-column: 1 / -1; padding: 20px 0", text: data.projects.length ? "Nothing matches. Clear the search or pick All." : "No projects yet. Add them on the laptop." }));
     }
     drawChips(); draw();
-    screen(header("Projects", plural(data.projects.length, "project"), { back: "#/more" }),
-      h("main", null, searchBox("Search projects and files", state.projectSearch, v => { state.projectSearch = v; draw(); }), chipRow, list), tabs("more"));
+    screen(header("Projects", plural(data.projects.length, "project"), { back: "#/home" }),
+      h("main", null, searchBox("Search projects and files", state.projectSearch, v => { state.projectSearch = v; draw(); }), chipRow, list), tabs("home"));
   }
   async function projectScreen(id) {
     const p = await api("/api/projects/" + id);
@@ -445,7 +449,7 @@
     } catch (e) { URL.revokeObjectURL(url); throw e; }
   }
   async function scanScreen() {
-    const pad = h("div", { class: "scanpad" }, h("div", { class: "frame" }, h("i")), h("div", { class: "muted", text: "Take a picture of a MakerVault QR label or the barcode on a filament box" }));
+    const pad = h("div", { class: "scanpad" }, h("div", { class: "frame" }, h("i")), h("div", { class: "muted", text: "Take a picture of a MakerVault QR label, or the barcode on a filament box or a supply" }));
     const out = h("div");
     const camera = h("input", { type: "file", accept: "image/*", capture: "environment", class: "hidden" });
     const gallery = h("input", { type: "file", accept: "image/*", class: "hidden" });
@@ -471,7 +475,8 @@
         const r = await api("/api/lookup?code=" + encodeURIComponent(code));
         state.lastScan = r;
         if (r.drawer) { go("#/drawer/" + r.drawer); return; }
-        if (r.found) out.replaceChildren(found(r.filament, r.via));
+        if (r.found && r.supply) out.replaceChildren(SUP().foundCard(r.supply, { next: () => { out.replaceChildren(); typed.value = ""; } }));
+        else if (r.found) out.replaceChildren(found(r.filament, r.via));
         else if (r.label) out.replaceChildren(h("div", { class: "note warn", text: r.message }));
         else go("#/learn/" + encodeURIComponent(r.code));
       } catch (e) { out.replaceChildren(h("div", { class: "note warn", text: e.message })); }
@@ -533,7 +538,7 @@
     draw();
     const tag = /^NFC:/.test(code);
     if (tag) remember.textContent = move ? "Move the tag here" : "Remember this tag";
-    screen(header(move ? "Move this tag" : tag ? "New NFC tag" : "New barcode", (tag ? "Tag " + code.slice(4) : code) + (move ? " · pick its new roll" : " · not known yet"), { back: tag ? "#/nfc" : "#/scan" }),
+    screen(header(move ? "Move this tag" : tag ? "New NFC tag" : "New barcode", (tag ? "Tag " + code.slice(4) : code) + (move ? " · pick its new roll" : " · not known yet"), { back: tag ? "#/nfc" : "#/learn/" + encodeURIComponent(code) }),
       h("main", null,
         h("div", { class: "note blue", text: move
           ? "Pick the roll this tag is on now. From then on, tapping it opens that roll. Nothing else changes."
@@ -601,7 +606,7 @@
     const lookupCode = m ? "MVF1:" + m[1] : /^[0-9a-z-]{4,40}$/i.test(code || "") ? "NFC:" + code.toLowerCase() : null;
     if (!lookupCode) { errorScreen("NFC tag", new Error("This tag's link isn't one MakerVault made."), "#/filament"); return; }
     const r = await api("/api/lookup?code=" + encodeURIComponent(lookupCode));
-    if (r.found) { history.replaceState(null, "", "#/filament/" + r.filament.id); render(); return; }
+    if (r.found) { history.replaceState(null, "", r.supply ? "#/supply/" + r.supply.id : "#/filament/" + r.filament.id); render(); return; }
     if (r.label) { errorScreen("NFC tag", new Error(r.message), "#/filament"); return; }
     history.replaceState(null, "", "#/learn/" + encodeURIComponent(r.code)); render();
   }
@@ -622,7 +627,7 @@
         } catch (e) { if (e.status !== 401) toast(e.message, true); }
       }
       return h("div", { class: "box stepper" + (x.out ? " out" : x.low ? " low" : "") },
-        h("span", { class: "l" }, h("span", { class: "n", text: x.name }), h("span", { class: "s", text: [x.size, x.category, x.out ? "Out" : x.low ? "Low" : ""].filter(Boolean).join(" · ") })),
+        h("button", { class: "l open", "aria-label": "Open " + x.name, onclick: () => go("#/supply/" + x.id) }, h("span", { class: "n", text: x.name }), h("span", { class: "s", text: [x.size, x.category, x.out ? "Out" : x.low ? "Low" : ""].filter(Boolean).join(" · ") })),
         h("button", { class: "sq", "aria-label": "One less " + x.name, disabled: x.quantity === 0, onclick: () => step(-1) }, "−"), n,
         h("button", { class: "sq", "aria-label": "One more " + x.name, onclick: () => step(1) }, "+"));
     }
@@ -634,7 +639,8 @@
     }
     function draw() {
       if (drawerId) {
-        if (!body.firstChild) body.replaceChildren(searchBox("Search this drawer…", "", v => { words = v.toLowerCase().split(/\s+/).filter(Boolean); drawList(); }), list);
+        if (!body.firstChild) body.replaceChildren(searchBox("Search this drawer…", "", v => { words = v.toLowerCase().split(/\s+/).filter(Boolean); drawList(); }), list,
+          h("button", { class: "btn dashed wide", style: "margin-top:8px", onclick: () => go("#/add-supply") }, "+ Add a supply"));
         drawList();
         return;
       }
@@ -644,7 +650,8 @@
       if (unsorted) drawers.push(h("button", { class: "frow", onclick: () => go("#/drawer/unsorted") }, h("span", { class: "mid" }, h("span", { class: "n", text: "Unsorted" }), h("span", { class: "s", text: plural(unsorted, "item") }))));
       body.replaceChildren(
         data.low ? h("button", { class: "note warn wide", style: "text-align:left", onclick: () => go("#/shopping") }, plural(data.low, "item") + " low or out › Shopping list") : "",
-        drawers.length ? h("div", { class: "rows" }, drawers) : h("div", { class: "muted", text: "No supplies yet. Add drawers and items on the laptop (Workshop › Supplies)." }));
+        drawers.length ? h("div", { class: "rows" }, drawers) : h("div", { class: "muted", text: "No supplies yet. Add drawers and items on the laptop (Workshop › Supplies), or add one here." }),
+        h("button", { class: "btn dashed wide", style: "margin-top:10px", onclick: () => go("#/add-supply") }, "+ Add a supply"));
     }
     draw();
     const title = drawer ? drawer.name : drawerId === "unsorted" ? "Unsorted" : "Supplies";
@@ -720,7 +727,7 @@
       if (r.received > 0) {
         state.filament = null; state.projects = null;
         const h = location.hash;
-        if (/^#\/(home|filament|supplies|drawer|toprint|shopping|projects)?$/.test(h) || h === "" || h === "#/") render();
+        if (/^#\/(home|filament|supplies|drawer|toprint|shopping|projects)?$/.test(h) || /^#\/(drawer|supply)\/[^/]+$/.test(h) || h === "" || h === "#/") render();
       }
       if (r.notes.length) console.log("Sync notes", r.notes);
     } catch (e) {
@@ -807,10 +814,11 @@
 
   // ------------------------------------------------------------------ home ("Workshop today")
   async function homeScreen() {
-    const [fil, sup, tp] = await Promise.all([api("/api/filament"), api("/api/supplies"), api("/api/toprint")]);
+    const [fil, sup, tp, pr] = await Promise.all([api("/api/filament"), api("/api/supplies"), api("/api/toprint"), loadProjects(true)]);
     const low = fil.filaments.filter(f => f.low).map(f => ({ hex: f.hex, name: f.name + " " + f.material, sub: "last open roll · " + (f.open.find(o => o.percent !== null && o.percent <= 10) || { percent: "?" }).percent + "%", tag: "Low", go: "#/filament/" + f.id }))
       .concat(sup.items.filter(x => x.out || x.low).map(x => ({ hex: null, name: x.name, sub: [(sup.drawers.find(d => d.id === x.drawer) || {}).name || "Unsorted", x.quantity + " left"].join(" · "), tag: x.out ? "Out" : "Low", go: x.drawer ? "#/drawer/" + x.drawer : "#/drawer/unsorted" })));
     const tile = (icon2, label, go2) => h("button", { class: "htile", onclick: () => go(go2) }, icon(icon2, "#8CC4FF"), h("span", { text: label }));
+    const recent = pr.projects.filter(p => !p.demo).slice().sort((a, b) => (Date.parse(b.updated) || 0) - (Date.parse(a.updated) || 0)).slice(0, 3);
     const next = tp.items[0];
     const nextNeed = next ? next.lines.reduce((s, l) => s + l.grams, 0) : 0;
     const nextHave = next && next.lines[0] && next.lines[0].filament ? (tp.needed.find(n => n.name.startsWith((fil.filaments.find(f => f.id === next.lines[0].filament) || {}).name || "\u0000")) || {}).have : null;
@@ -818,7 +826,11 @@
     screen(header("Workshop", d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }), { right: conn() }),
       h("main", null,
         store.state.removed ? h("div", { class: "note warn", text: "This phone was removed from sync on another device. More › Set up again." }) : null,
-        h("div", { class: "htiles" }, tile("tag", "Tap a tag", "#/nfc"), tile("log", "Log a print", "#/log"), tile("projects", "To print · " + tp.items.length, "#/toprint"), tile("supplies", "Shopping list", "#/shopping")),
+        // Stage 14 (board 1A): Projects on the home screen, with the most recently changed ones.
+        h("div", { class: "htiles" }, tile("grid", "Projects · " + pr.projects.length, "#/projects"), tile("log", "Log a print", "#/log"), tile("list", "To print · " + tp.items.length, "#/toprint"), tile("tag", "Tap a tag", "#/nfc")),
+        h("div", { class: "box" }, h("div", { style: "display:flex;align-items:center;margin-bottom:4px" }, h("div", { style: "flex:1;font-weight:600", text: "Recent projects" }), h("a", { href: "#/projects", class: "small", text: pr.projects.length ? "All " + pr.projects.length : "Projects" })),
+          recent.length ? h("div", { class: "rows" }, recent.map(p => h("button", { class: "lrow", onclick: () => go("#/project/" + p.id) }, h("span", { class: "pthumb" }, icon("grid", "#8CC4FF")),
+            h("span", { class: "mid" }, h("span", { class: "n", text: p.name }), h("span", { class: "s", text: [p.kind, p.status].filter(Boolean).join(" · ") }))))) : h("div", { class: "muted", style: "margin-top:6px", text: "No projects yet. Add them on the laptop." })),
         h("div", { class: "box" }, h("div", { style: "display:flex;align-items:center" }, h("div", { style: "flex:1;font-weight:600", text: "Low or out" }), h("a", { href: "#/shopping", class: "small", text: "See all" })),
           low.length ? h("div", { class: "rows", style: "margin-top:4px" }, low.slice(0, 6).map(x => h("button", { class: "lrow", onclick: () => go(x.go) }, x.hex ? swatch(x.hex) : h("span", { class: "sw grey" }),
             h("span", { class: "mid" }, h("span", { class: "n", text: x.name }), h("span", { class: "s", text: x.sub })), h("span", { class: "pill low", text: x.tag })))) : h("div", { class: "muted", style: "margin-top:6px", text: "Nothing is low. 👍" })),
@@ -854,7 +866,11 @@
       if (mode !== "count") return;
       sheet.className = "livesheet";
       sheet.replaceChildren(h("div", { style: "font-weight:600;margin-bottom:6px", text: counted.size ? "Counted" : "Point at codes one after another" }),
-        ...[...counted.values()].map(x => h("button", { class: "lrow", onclick: () => { stopCamera(); go(x.go); } }, x.hex ? swatch(x.hex) : h("span", { class: "sw grey" }), h("span", { class: "mid" }, h("span", { class: "n", text: x.name })), h("span", { class: "pill", text: "×" + x.n }))));
+        ...[...counted.values()].map(x => x.supply
+          // Stage 14: counted supplies can go into stock in one go ("scan 6 bags of magnets → +6").
+          ? h("div", { class: "lrow" }, h("span", { class: "sw grey" }), h("span", { class: "mid" }, h("span", { class: "n", text: x.name }), h("span", { class: "s", text: x.added ? "+" + x.added + " added · " + x.supply.quantity + " in stock" : SUP().subText(x.supply) })),
+              x.n ? h("button", { class: "pill", style: "min-height:32px", onclick: async () => { try { await SUP().addCounted(x.supply, x.n); x.added = (x.added || 0) + x.n; x.n = 0; drawCount(); } catch (e) { toast(e.message, true); } } }, "Add " + x.n + " to stock") : h("span", { class: "pill ok", text: "Added" }))
+          : h("button", { class: "lrow", onclick: () => { stopCamera(); go(x.go); } }, x.hex ? swatch(x.hex) : h("span", { class: "sw grey" }), h("span", { class: "mid" }, h("span", { class: "n", text: x.name })), h("span", { class: "pill", text: "×" + x.n }))));
     }
     let last = "", lastAt = 0, busy = false;
     async function found(text) {
@@ -865,11 +881,13 @@
         if (navigator.vibrate) navigator.vibrate(30);
         const r = await api("/api/lookup?code=" + encodeURIComponent(text));
         const drawer = r.drawer ? (await api("/api/supplies")).drawers.find(d => d.id === r.drawer) : null;
-        const label = r.found ? { name: r.filament.name + " " + r.filament.material, hex: r.filament.hex, go: "#/filament/" + r.filament.id, sub: (r.via === "label" ? "QR label" : "Barcode") + " · " + rollsText(r.filament) }
+        const label = r.found && r.supply ? { name: r.supply.name, hex: null, go: "#/supply/" + r.supply.id, sub: SUP().subText(r.supply), supply: r.supply }
+          : r.found ? { name: r.filament.name + " " + r.filament.material, hex: r.filament.hex, go: "#/filament/" + r.filament.id, sub: (r.via === "label" ? "QR label" : "Barcode") + " · " + rollsText(r.filament) }
           : drawer ? { name: drawer.name, hex: null, go: "#/drawer/" + drawer.id, sub: plural(drawer.count, "item") + (drawer.note ? " · " + drawer.note : "") }
           : r.label ? { name: r.message, hex: null, go: null, sub: "" } : { name: "New code " + r.code, hex: null, go: "#/learn/" + encodeURIComponent(r.code), sub: "Not known yet · tap to teach it" };
         if (mode === "count") { const k = label.go || text; const c = counted.get(k) || Object.assign({ n: 0 }, label); c.n++; counted.set(k, c); drawCount(); return; }
         sheet.className = "livesheet";
+        if (label.supply) { sheet.replaceChildren(SUP().foundCard(label.supply, { sheet: true, leave: stopCamera, next: () => { sheet.className = "livesheet hidden"; last = ""; } })); return; }
         sheet.replaceChildren(
           h("div", { style: "display:flex;align-items:center;gap:10px" }, label.hex ? swatch(label.hex) : icon(drawer ? "supplies" : "scan", "#8CC4FF"),
             h("div", { style: "flex:1;min-width:0" }, h("div", { class: "mid-name", style: "font-size:17px;font-weight:600", text: label.name }), label.sub ? h("div", { class: "muted small", text: label.sub }) : null),
@@ -951,6 +969,7 @@
             h("button", { class: "btn primary wide", style: "margin-top:10px", onclick: () => { stopNfc(); go("#/learn/" + encodeURIComponent(r.code)); } }, "Which roll is it on?")));
           return;
         }
+        if (r.supply) { card.replaceChildren(SUP().foundCard(r.supply, { leave: stopNfc })); return; }
         const f = r.filament, first = f.open[0];
         card.replaceChildren(h("div", { class: "box", style: "border-color:var(--blue)" },
           h("div", { style: "display:flex;align-items:center;gap:12px" }, swatch(f.hex, "big"),
@@ -1105,7 +1124,7 @@
           if (!confirm("Set up MakerVault Mobile again? Changes not yet sent are lost; everything already synced stays in your Google Drive.")) return;
           store = E.emptyStore(); await saveNow(); location.hash = "#/setup"; render();
         } }, "Set up again"),
-        h("div", { class: "muted small", style: "margin-top:18px", text: "MakerVault Mobile (Stage 12). Barcode reading uses ZXing (Apache 2.0). The home Wi-Fi phone page from the laptop (Phone in the sidebar) still works too." }),
+        h("div", { class: "muted small", style: "margin-top:18px", text: "MakerVault Mobile (Stage 14). Barcode reading uses ZXing (Apache 2.0). The home Wi-Fi phone page from the laptop (Phone in the sidebar) still works too." }),
         h("div", { class: "small", style: "margin-top:10px" }, h("a", { href: "privacy.html", style: "color:var(--blue-text)", text: "Privacy policy" }), h("span", { class: "muted", text: "  ·  " }), h("a", { href: "home.html", style: "color:var(--blue-text)", text: "About MakerVault" }))), tabs("more"));
   }
 
@@ -1140,7 +1159,12 @@
       else if (a === "add") await addScreen(b || "");
       else if (a === "scan") await liveScanScreen();
       else if (a === "scan-photo") await scanScreen();
-      else if (a === "learn" && b) await learnScreen(b, c === "move");
+      else if (a === "learn" && b && c === "supply") await SUP().pickScreen(b);
+      else if (a === "learn" && b && (c === "move" || c === "filament" || /^NFC:/i.test(b))) await learnScreen(b, c === "move");
+      else if (a === "learn" && b) SUP().chooseScreen(b);
+      else if (a === "supply" && b && c === "edit") await SUP().formScreen(null, b);
+      else if (a === "supply" && b) await SUP().detailScreen(b);
+      else if (a === "add-supply") await SUP().formScreen(b || "", null);
       else if (a === "more") await moreScreen();
       else await homeScreen();
     } catch (e) {
