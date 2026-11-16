@@ -353,6 +353,18 @@
         if (!x) fail(404, "That item is not in your supplies any more.");
         return { supply: supply(x), barcodes: supplyBarcodes(x.id), drawers: drawers().map(d => ({ id: d.id, name: d.name })), categories: SUPPLY_CATEGORIES };
       }
+      if (a === "supply" && s.length === 3 && s[2] === "delete" && post) {
+        // Same as the laptop's Delete item: its barcodes, maker/model and project uses go too; maintenance keeps the task.
+        const x = T("supplies")[s[1]];
+        if (!x) fail(404, "That item is not in your supplies any more.");
+        for (const [k, u] of Object.entries(T("supply_uses"))) if (u.supply_id === x.id) delete T("supply_uses")[k];
+        for (const [k, b] of Object.entries(T("supply_barcodes"))) if (b.supply_id === x.id) delete T("supply_barcodes")[k];
+        delete T("supply_makers")[x.id];
+        for (const m of Object.values(T("maintenance_tasks"))) if (m.supply_id === x.id) m.supply_id = null;
+        delete T("supplies")[x.id];
+        changed("supplies");
+        return { done: true, drawer: x.drawer_id || null };
+      }
       if (a === "supply" && s.length === 2 && post) { const id = saveSupply(body, s[1]); return { supply: supply(T("supplies")[id]) }; }
       if (a === "supply-choices" && !post) {
         const cats = [...new Set(Object.values(T("supplies")).map(x => x.category).filter(Boolean).concat(SUPPLY_CATEGORIES))];

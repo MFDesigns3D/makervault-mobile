@@ -187,7 +187,12 @@
             h("span", { class: "muted small", text: plural(data.barcodes.length, "code") })), codes,
             h("button", { class: "btn ghost wide", style: "margin-top:10px", onclick: () => go("#/scan") }, "Scan a barcode")),
           h("div", { class: "btns" }, h("button", { class: "btn", onclick: () => go("#/supply/" + x.id + "/edit") }, "Edit"),
-            h("button", { class: "btn", onclick: () => go("#/drawer/" + (x.drawer || "unsorted")) }, "Open drawer"))), tabs("supplies"));
+            h("button", { class: "btn", onclick: () => go("#/drawer/" + (x.drawer || "unsorted")) }, "Open drawer")),
+          h("button", { class: "btn ghost danger wide", style: "margin-top:18px", onclick: async () => {
+            if (!confirm("Delete " + x.name + "? Its count and barcodes go too, and projects that use it stop listing it. Your other supplies aren't touched.")) return;
+            try { const r = await api("/api/supply/" + x.id + "/delete", {}); toast("Deleted " + x.name); history.replaceState(null, "", "#/drawer/" + (r.drawer || "unsorted")); render(); }
+            catch (e) { if (e.status !== 401) toast(e.message, true); }
+          } }, "Delete item")), tabs("supplies"));
     }
 
     return { foundCard, addCounted, chooseScreen, pickScreen, formScreen, detailScreen, subText };
