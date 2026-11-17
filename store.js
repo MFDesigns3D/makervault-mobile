@@ -260,7 +260,7 @@
       const total = lines.reduce((s, l) => s + Number(l.grams), 0);
       const nowText = now();
       T("print_jobs")[id] = { id, project_id: project, machine_id: machine, title: titleText, file_name: "", plates: "", copies: String(copies), outcome, percent: String(percent), reason: clean(body.reason || "").slice(0, 200),
-        minutes: "0", grams: String(Math.round(total * 100) / 100), source: "manual", source_key: "", needs_check: "0", printed_utc: nowText, created_utc: nowText };
+        minutes: String(Math.max(0, Math.min(60 * 24 * 30, Math.round(Number(body.minutes) || 0)))), grams: String(Math.round(total * 100) / 100), source: "manual", source_key: "", needs_check: "0", printed_utc: nowText, created_utc: nowText };
       T("print_job_extra")[id] = { job_id: id, file_path: "", notes: clean(body.notes || "").slice(0, 2000), took: body.take === false ? "0" : "1", slicer_ids: lines.map(() => "0").join(",") };
       const notes = [];
       lines.forEach((l, i) => {
@@ -279,6 +279,102 @@
       changed("print");
       void store;
       return { job: id, notes };
+    }
+
+    // ------------------------------------------------------------------ Stage 15: machines, loaded filament, maintenance
+    // Same rules as MakerVault.Core MaintenanceRules: print hours from the log (minutes × copies, × % for failed prints),
+    // prints = copies, days = calendar days; due when reached, "soon" within 10%.
+    function printHours(j) {
+      if (j.source === "live") return int(j.minutes) / 60;
+      const share = j.outcome === "done" ? 1 : int(j.percent) / 100;
+      return int(j.minutes) * Math.max(1, int(j.copies)) * share / 60;
+    }
+    const unitLabel = (u, n) => u === "hours" ? "print hours" : u === "prints" ? (Math.abs(n - 1) < 0.001 ? "print" : "prints") : (Math.abs(n - 1) < 0.001 ? "day" : "days");
+    const localDay = d => { const x = new Date(d); return new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime(); };
+    const N = v => Math.round(v).toLocaleString();
+    function reminderState(t, jobs, nowMs) {
+      const last = Date.parse(t.last_done_utc) || 0;
+      const mine = jobs.filter(j => j.machine_id === t.machine_id && (Date.parse(j.printed_utc) || 0) > last);
+      const every = int(t.every);
+      const since = t.unit === "hours" ? mine.reduce((s, j) => s + printHours(j), 0)
+        : t.unit === "prints" ? mine.reduce((s, j) => s + Math.max(1, int(j.copies)), 0)
+        : Math.max(0, Math.round((localDay(nowMs) - localDay(last)) / 86400000));
+      const left = every - since, due = left <= 0, soon = !due && left <= Math.max(1, every * 0.1);
+      let dueText;
+      if (due) { const over = -left; dueText = Math.round(over) < 1 ? "Due" : t.unit === "hours" ? "Due · " + N(over) + " h over" : "Due · " + N(over) + " " + unitLabel(t.unit, Math.round(over)) + " over"; }
+      else dueText = t.unit === "hours" ? "in " + N(Math.ceil(left)) + " h" : "in " + N(Math.ceil(left)) + " " + unitLabel(t.unit, Math.ceil(left));
+      return { due, soon, left: Math.round(left * 10) / 10, since: Math.round(since * 10) / 10, dueText };
+    }
+    function reminders(machineId) {
+      const jobs = Object.values(T("print_jobs")), nowMs = Date.now();
+      const sups = T("supplies");
+      return Object.values(T("maintenance_tasks")).filter(t => !machineId || t.machine_id === machineId).map(t => {
+        const st = reminderState(t, jobs, nowMs);
+        const sup = t.supply_id && sups[t.supply_id] ? supply(sups[t.supply_id]) : null;
+        return { id: t.id, machine: t.machine_id, name: t.name, every: int(t.every), unit: t.unit, everyText: "every " + int(t.every).toLocaleString() + " " + unitLabel(t.unit, int(t.every)),
+          due: st.due, soon: st.soon, dueText: st.dueText, left: st.left, order: st.left / Math.max(1, int(t.every)), supply: sup ? sup.name : "", supplyCount: int(t.supply_count) || 1 };
+      }).sort((a, b) => a.order - b.order);
+    }
+    function machineOut(m) {
+      const fil = T("filaments");
+      const slots = Object.values(T("machine_slots")).filter(x => x.machine_id === m.id).sort((a, b) => int(a.slot) - int(b.slot)).map(x => {
+        const f = x.filament_id && fil[x.filament_id] ? filament(fil[x.filament_id]) : null;
+        return { slot: int(x.slot), label: x.label, filament: f ? { id: f.id, name: f.name, material: f.material, hex: f.hex, open: f.open.length, unopened: f.unopened } : null };
+      });
+      const rem = reminders(m.id);
+      const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+      const jobs = Object.values(T("print_jobs")).filter(j => j.machine_id === m.id);
+      const month = jobs.filter(j => (Date.parse(j.printed_utc) || 0) >= monthStart.getTime());
+      return { id: m.id, name: m.name, kind: m.kind, details: m.details || "", live: m.live_kind === "moonraker" && !!m.live_address, address: m.live_address || "", slots, reminders: rem,
+        due: rem.filter(r => r.due).length, soon: rem.filter(r => r.soon).length,
+        month: { prints: month.reduce((n, j) => n + Math.max(1, int(j.copies)), 0), hours: Math.round(month.reduce((h, j) => h + printHours(j), 0) * 10) / 10 } };
+    }
+    const machineList = () => Object.values(T("machines")).sort((x, y) => int(x.position) - int(y.position) || x.name.localeCompare(y.name)).map(machineOut);
+    function setSlot(machineId, slotNo, body) {
+      const m = T("machines")[machineId];
+      if (!m) fail(404, "That machine is not in your workshop any more.");
+      const key = machineId + "\u001f" + slotNo;
+      const row = T("machine_slots")[key] || Object.values(T("machine_slots")).find(x => x.machine_id === machineId && int(x.slot) === slotNo);
+      if (!row) fail(404, "That slot is gone. Check the machine on the laptop.");
+      const fid = body.filament || null;
+      if (fid && !T("filaments")[fid]) fail(404, "That filament is not in your list any more.");
+      let opened = false;
+      if (fid && body.open) {
+        // "An unopened roll? Mark it opened": a filament with no open roll but unopened ones gets one opened (like Open a new roll).
+        const f = T("filaments")[fid];
+        const rolls = Object.values(T("filament_open_rolls")).filter(r => r.filament_id === fid);
+        if (rolls.length === 0 && int(f.unopened) > 0) {
+          f.unopened = String(int(f.unopened) - 1);
+          f.updated_utc = now();
+          const rid = E.newId();
+          T("filament_open_rolls")[rid] = { id: rid, filament_id: fid, position: "0", percent_left: "100" };
+          opened = true;
+        }
+      }
+      if ((row.filament_id || null) === fid && !opened) return { machine: machineOut(m), opened, changed: false };
+      row.filament_id = fid;
+      changed("machines");
+      return { machine: machineOut(m), opened, changed: true };
+    }
+    function maintenanceDone(taskId, body) {
+      const t = T("maintenance_tasks")[taskId];
+      if (!t) fail(404, "That reminder is gone.");
+      const when = now();
+      let text = clean(body && body.note || "").slice(0, 200);
+      const notes = [];
+      const sup = t.supply_id && T("supplies")[t.supply_id];
+      if (sup) {
+        const have = int(sup.quantity), use = int(t.supply_count) || 1, name = supply(sup).name;
+        sup.quantity = String(Math.max(0, have - use));
+        sup.updated_utc = when;
+        text = (text ? text + " · " : "") + "used " + use + " × " + sup.name;
+        notes.push(have >= use ? "Took " + use + " × " + name + " out of Supplies (" + (have - use) + " left)." : name + ": used " + use + " but only " + have + " were listed. Now 0.");
+      }
+      t.last_done_utc = when;
+      const id = E.newId();
+      T("maintenance_done")[id] = { id, task_id: t.id, machine_id: t.machine_id, name: t.name, done_utc: when, note: text };
+      changed("machines");
+      return { notes, machine: T("machines")[t.machine_id] ? machineOut(T("machines")[t.machine_id]) : null };
     }
 
     function projectList() {
@@ -373,7 +469,11 @@
         return { drawers: drawers().map(d => ({ id: d.id, name: d.name })), categories: cats, makers, models };
       }
       if (a === "toprint" && !post) return toPrint();
-      if (a === "machines" && !post) return { machines: Object.values(T("machines")).sort((x, y) => int(x.position) - int(y.position)).map(m => ({ id: m.id, name: m.name, kind: m.kind })) };
+      if (a === "machines" && !post) { const list = machineList(); return { machines: list, due: list.reduce((n, m) => n + m.due, 0) }; }
+      // Stage 15: one machine, change what's loaded in a slot, tick off a reminder.
+      if (a === "machine" && s.length === 2 && !post) { const m = T("machines")[s[1]]; if (!m) fail(404, "That machine is not in your workshop any more."); return { machine: machineOut(m) }; }
+      if (a === "machine" && s.length === 3 && s[2] === "slot" && post) return setSlot(s[1], int(body.slot), body);
+      if (a === "maintenance" && s.length === 3 && s[2] === "done" && post) return maintenanceDone(s[1], body);
       if (a === "supply" && s[2] === "quantity" && post) {
         const delta = int(body.delta);
         if (delta === 0 || delta < -1000 || delta > 1000) fail(400, "Change a few at a time.");

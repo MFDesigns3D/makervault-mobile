@@ -33,6 +33,7 @@
     home: "M4 5h16v14H4z M4 10h16", supplies: "M3 7l9-4 9 4v10l-9 4-9-4z M3 7l9 4 9-4 M12 11v10",
     tag: "M6 8a8 8 0 0 1 0 8 M10 6a11 11 0 0 1 0 12 M14 4a14 14 0 0 1 0 16", log: "M6 3h9l4 4v14H6z M9 11h7 M9 15h7 M9 7h3",
     light: "M9 2h6l-1 7h3l-6 13 1-9H8z",
+    printer: "M6 9V3h12v6 M4 9h16v8H4z M7 17v4h10v-4 M8 13h8",
     grid: "M4 4h7v7H4z M13 4h7v7h-7z M4 13h7v7H4z M13 13h7v7h-7z", list: "M8 6h12 M8 12h12 M8 18h12 M4 6h.01 M4 12h.01 M4 18h.01",
   };
   // Bambu Lab spools carry MIFARE Classic tags: Android reports a 4-byte serial number (8 hex digits, "aa:bb:cc:dd").
@@ -814,7 +815,8 @@
 
   // ------------------------------------------------------------------ home ("Workshop today")
   async function homeScreen() {
-    const [fil, sup, tp, pr] = await Promise.all([api("/api/filament"), api("/api/supplies"), api("/api/toprint"), loadProjects(true)]);
+    const [fil, sup, tp, pr, mach] = await Promise.all([api("/api/filament"), api("/api/supplies"), api("/api/toprint"), loadProjects(true), api("/api/machines")]);
+    const dueList = mach.machines.flatMap(m => m.reminders.filter(r => r.due).map(r => Object.assign({ machineName: m.name }, r)));
     const low = fil.filaments.filter(f => f.low).map(f => ({ hex: f.hex, name: f.name + " " + f.material, sub: "last open roll · " + (f.open.find(o => o.percent !== null && o.percent <= 10) || { percent: "?" }).percent + "%", tag: "Low", go: "#/filament/" + f.id }))
       .concat(sup.items.filter(x => x.out || x.low).map(x => ({ hex: null, name: x.name, sub: [(sup.drawers.find(d => d.id === x.drawer) || {}).name || "Unsorted", x.quantity + " left"].join(" · "), tag: x.out ? "Out" : "Low", go: x.drawer ? "#/drawer/" + x.drawer : "#/drawer/unsorted" })));
     const tile = (icon2, label, go2) => h("button", { class: "htile", onclick: () => go(go2) }, icon(icon2, "#8CC4FF"), h("span", { text: label }));
@@ -827,7 +829,13 @@
       h("main", null,
         store.state.removed ? h("div", { class: "note warn", text: "This phone was removed from sync on another device. More › Set up again." }) : null,
         // Stage 14 (board 1A): Projects on the home screen, with the most recently changed ones.
-        h("div", { class: "htiles" }, tile("grid", "Projects · " + pr.projects.length, "#/projects"), tile("log", "Log a print", "#/log"), tile("list", "To print · " + tp.items.length, "#/toprint"), tile("tag", "Tap a tag", "#/nfc")),
+        // Stage 15 (board 5): a Machines tile (amber when something is due) and the due reminders with Done today.
+        h("div", { class: "htiles three" }, tile("grid", "Projects · " + pr.projects.length, "#/projects"), tile("log", "Log a print", "#/log"), tile("list", "To print · " + tp.items.length, "#/toprint"),
+          machinesTile(mach), tile("tag", "Tap a tag", "#/nfc"), tile("supplies", "Supplies", "#/supplies")),
+        dueList.length ? h("div", { class: "box duebox" }, h("div", { class: "duetitle", text: "Maintenance due" }),
+          ...dueList.slice(0, 4).map(r => h("div", { class: "duerow" }, h("div", { class: "mid" }, h("div", { text: r.name }), h("div", { class: "small", style: "color:var(--soft)", text: r.machineName + " · " + r.dueText.toLowerCase() })),
+            h("button", { class: "btn primary small", onclick: e => doneToday(r, e.currentTarget, () => render()) }, "Done today"))),
+          dueList.length > 4 ? h("a", { href: "#/machines", class: "small", text: "All " + dueList.length + " on Machines" }) : null) : null,
         h("div", { class: "box" }, h("div", { style: "display:flex;align-items:center;margin-bottom:4px" }, h("div", { style: "flex:1;font-weight:600", text: "Recent projects" }), h("a", { href: "#/projects", class: "small", text: pr.projects.length ? "All " + pr.projects.length : "Projects" })),
           recent.length ? h("div", { class: "rows" }, recent.map(p => h("button", { class: "lrow", onclick: () => go("#/project/" + p.id) }, h("span", { class: "pthumb" }, icon("grid", "#8CC4FF")),
             h("span", { class: "mid" }, h("span", { class: "n", text: p.name }), h("span", { class: "s", text: [p.kind, p.status].filter(Boolean).join(" · ") }))))) : h("div", { class: "muted", style: "margin-top:6px", text: "No projects yet. Add them on the laptop." })),
@@ -838,6 +846,101 @@
           h("div", { style: "color:var(--soft)", text: [next.title + (next.copies > 1 ? " ×" + next.copies : ""), next.machine].filter(Boolean).join(" · ") }),
           nextNeed ? h("div", { class: "muted small", style: "margin-top:2px", text: "needs " + Math.round(nextNeed) + " g" + (nextHave != null ? " · you have " + Math.round(nextHave) + " g" : "") }) : null) : null),
       tabs("home"));
+  }
+
+  // ------------------------------------------------------------------ Stage 15: machines, loaded filament, maintenance
+  function machinesTile(mach) {
+    const b = h("button", { class: "htile" + (mach.due ? " due" : ""), onclick: () => go("#/machines") }, icon("printer", mach.due ? "#FFC266" : "#8CC4FF"),
+      h("span", { text: "Machines · " + (mach.due ? mach.due + " due" : mach.machines.length) }));
+    return b;
+  }
+  async function doneToday(r, button, after) {
+    if (button) button.disabled = true;
+    try {
+      const res = await api("/api/maintenance/" + r.id + "/done", {});
+      toast(res.notes.length ? res.notes[0] : "Done: " + r.name);
+      if (after) after(res);
+    } catch (e) { if (button) button.disabled = false; toast(e.message, true); }
+  }
+  function slotSquares(m) {
+    return h("div", { class: "slotsq" }, ...m.slots.map(s => {
+      const sq = h("span", { class: "sq" + (s.filament ? "" : " empty"), title: s.label + ": " + (s.filament ? s.filament.name + " " + s.filament.material : "empty"), text: s.label.replace(/^[LR] /, "") });
+      if (s.filament) { sq.style.background = hex(s.filament.hex); sq.style.color = dark(s.filament.hex) ? "#E8ECF1" : "#111418"; }
+      return sq;
+    }));
+  }
+  function dark(color) { const c = hex(color); const n = i => parseInt(c.substr(i, 2), 16); return (n(1) * 299 + n(3) * 587 + n(5) * 114) / 1000 < 110; }
+  function machineSub(m) {
+    const first = m.reminders[0];
+    if (m.due) { const d = m.reminders.find(r => r.due); return d.name + " · " + d.dueText.toLowerCase(); }
+    if (first) return first.name + " · " + first.dueText;
+    return m.month.prints ? plural(m.month.prints, "print") + " this month" : "No prints logged yet";
+  }
+  async function machinesScreen() {
+    const data = await api("/api/machines");
+    const cards = data.machines.map(m => h("button", { class: "box mcard" + (m.due ? " due" : ""), onclick: () => go("#/machine/" + m.id) },
+      h("div", { class: "mhead" }, h("span", { class: "mname", text: m.name }), h("span", { class: m.due ? "pill low" : "pill ok", text: m.due ? m.due + " due" : "OK" })),
+      m.slots.length ? slotSquares(m) : null,
+      h("div", { class: "muted small", text: machineSub(m) })));
+    screen(header("Machines", plural(data.machines.length, "machine") + (data.due ? " · " + plural(data.due, "reminder") + " due" : ""), { back: "#/home" }), h("main", null,
+      cards.length ? h("div", null, cards) : h("div", { class: "note", text: "No machines yet. On the laptop: Machines › Add my printers…" }),
+      cards.length ? h("div", { class: "muted small", style: "padding:0 4px", text: "Coloured squares are what's loaded in each slot. Tap a printer to swap a spool or tick off maintenance." }) : null), tabs("home"));
+  }
+  async function machineScreen(id) {
+    const [{ machine: m }, fil] = await Promise.all([api("/api/machine/" + id), loadFilament(true)]);
+    const slotRows = m.slots.map(s => h("div", { class: "slotrow" },
+      h("span", { class: "slabel", text: s.label }), s.filament ? swatch(s.filament.hex) : h("span", { class: "sw grey" }),
+      h("span", { class: "mid", text: s.filament ? s.filament.name + " " + s.filament.material : "(empty)", style: s.filament ? "" : "color:var(--muted)" }),
+      h("button", { class: "btn small", "aria-label": "Change " + s.label, onclick: () => slotSheet(m, s, fil.filaments) }, "Change")));
+    const remRows = m.reminders.map(r => h("div", { class: "duerow" },
+      h("div", { class: "mid" }, h("div", { text: r.name }), h("div", { class: "small", style: "color:" + (r.due ? "var(--low)" : r.soon ? "var(--soft)" : "var(--muted)"), text: (r.due ? r.dueText.toLowerCase() : r.dueText) + " · " + r.everyText + (r.supply ? " · uses " + r.supplyCount + " × " + r.supply : "") })),
+      h("button", { class: "btn small" + (r.due ? " primary" : ""), onclick: e => doneToday(r, e.currentTarget, () => render()) }, "Done today")));
+    screen(header(m.name, [m.kind, m.details].filter(Boolean).join(" · "), { back: "#/machines" }), h("main", null,
+      h("div", { class: "box" }, h("h2", { text: "Loaded filament" }), slotRows.length ? h("div", null, slotRows) : h("div", { class: "muted", text: "This machine has no filament slots. Add them on the laptop (⋯ › Edit)." })),
+      h("div", { class: "box" }, h("h2", { text: "Maintenance" }), remRows.length ? h("div", null, remRows) : h("div", { class: "muted", text: "No reminders yet." }),
+        h("div", { class: "muted small", style: "margin-top:8px", text: "Add or change reminders on the laptop (Machines › ⋯ › Maintenance…)." })),
+      m.month.prints ? h("div", { class: "muted small", style: "padding:0 4px", text: plural(m.month.prints, "print") + " this month · " + m.month.hours + " print hours" }) : null), tabs("home"));
+  }
+  async function putInSlot(m, s, filamentId, open) {
+    const r = await api("/api/machine/" + m.id + "/slot", { slot: s.slot, filament: filamentId, open });
+    const now = r.machine.slots.find(x => x.slot === s.slot);
+    toast(now && now.filament ? s.label + ": " + now.filament.name + " " + now.filament.material + (r.opened ? " · opened a new roll" : "") : s.label + " is empty");
+    state.filament = null;
+    return r;
+  }
+  function slotSheet(m, s, filaments) {
+    const close = () => back.remove();
+    const openBox = h("input", { type: "checkbox", checked: localStorage.getItem("mv.slotOpen") !== "0" });
+    openBox.addEventListener("change", () => localStorage.setItem("mv.slotOpen", openBox.checked ? "1" : "0"));
+    const list = h("div", { class: "rows slotpick" });
+    const draw = words => {
+      const w = words.toLowerCase().split(/\s+/).filter(Boolean);
+      const shown = filaments.filter(f => f.total > 0 || (s.filament && s.filament.id === f.id)).filter(f => w.every(x => (f.name + " " + f.material + " " + f.colour).toLowerCase().includes(x))).slice(0, 40);
+      list.replaceChildren(...shown.map(f => h("button", { class: "lrow", onclick: async () => { try { close(); await putInSlot(m, s, f.id, openBox.checked); render(); } catch (e) { toast(e.message, true); } } },
+        swatch(f.hex), h("span", { class: "mid" }, h("span", { class: "n", text: f.name + " " + f.material }), h("span", { class: "s", text: rollsText(f) })))));
+      if (!shown.length) list.replaceChildren(h("div", { class: "muted small", style: "padding:8px 0", text: "No rolls match." }));
+    };
+    const pick = (hash) => { state.slotPick = { machine: m.id, machineName: m.name, slot: s.slot, label: s.label, open: openBox.checked }; close(); go(hash); };
+    const back = h("div", { class: "sheet-back", onclick: e => { if (e.target === back) close(); } },
+      h("div", { class: "sheet", role: "dialog", "aria-label": "What's in " + s.label + " now?" },
+        h("h3", { text: "What's in " + s.label + " now?" }),
+        h("div", { class: "btns" }, h("button", { class: "btn primary", onclick: () => pick("#/scan") }, "Scan the spool"), "NDEFReader" in window ? h("button", { class: "btn primary", onclick: () => pick("#/nfc") }, "Tap the spool tag") : null),
+        h("div", { class: "muted small", style: "margin:12px 0 6px", text: "Or pick from your filament" }),
+        searchBox("Search: PETG black…", "", draw), list,
+        h("label", { class: "check" }, openBox, "An unopened roll? Mark it opened"),
+        h("div", { class: "btns" }, h("button", { class: "btn", onclick: async () => { try { close(); await putInSlot(m, s, null, false); render(); } catch (e) { toast(e.message, true); } } }, "Empty"), h("button", { class: "btn ghost", onclick: close }, "Cancel"))));
+    draw("");
+    document.body.append(back);
+  }
+  // A spool found by the camera or an NFC tap while a slot is waiting (from "What's in A3 now?"): load it and go back.
+  async function slotFound(r) {
+    const p = state.slotPick;
+    if (!p || !r || !r.found || !r.filament) return false;
+    state.slotPick = null;
+    await putInSlot({ id: p.machine }, { slot: p.slot, label: p.label }, r.filament.id, p.open);
+    stopCamera(); stopNfc();
+    go("#/machine/" + p.machine);
+    return true;
   }
 
   // ------------------------------------------------------------------ live camera (no photos saved)
@@ -880,6 +983,7 @@
       try {
         if (navigator.vibrate) navigator.vibrate(30);
         const r = await api("/api/lookup?code=" + encodeURIComponent(text));
+        if (mode === "each" && await slotFound(r)) return;
         const drawer = r.drawer ? (await api("/api/supplies")).drawers.find(d => d.id === r.drawer) : null;
         const label = r.found && r.supply ? { name: r.supply.name, hex: null, go: "#/supply/" + r.supply.id, sub: SUP().subText(r.supply), supply: r.supply }
           : r.found ? { name: r.filament.name + " " + r.filament.material, hex: r.filament.hex, go: "#/filament/" + r.filament.id, sub: (r.via === "label" ? "QR label" : "Barcode") + " · " + rollsText(r.filament) }
@@ -899,7 +1003,7 @@
       finally { busy = false; }
     }
     screen(h("div", { class: "live" }, box,
-      h("div", { class: "livetop" }, h("button", { class: "round", "aria-label": "Close", onclick: () => { stopCamera(); go("#/home"); } }, "×"), h("div", { class: "livetitle", text: "Live camera" }), light),
+      h("div", { class: "livetop" }, h("button", { class: "round", "aria-label": "Close", onclick: () => { const p = state.slotPick; state.slotPick = null; stopCamera(); go(p ? "#/machine/" + p.machine : "#/home"); } }, "×"), h("div", { class: "livetitle", text: state.slotPick ? "Spool for " + state.slotPick.label : "Live camera" }), light),
       h("div", { class: "liveframe" }), status, modes, sheet,
       h("div", { class: "livelinks" }, h("button", { class: "linkish", onclick: () => { stopCamera(); go("#/scan-photo"); } }, "Use a photo instead"))));
     drawModes();
@@ -963,6 +1067,7 @@
       try {
         const r = await api("/api/lookup?code=" + encodeURIComponent(lookupCode));
         if (navigator.vibrate) navigator.vibrate(40);
+        if (await slotFound(r)) return;
         if (!r.found) {
           if (r.label) { card.replaceChildren(h("div", { class: "note warn", text: r.message })); return; }
           card.replaceChildren(h("div", { class: "box", style: "border-color:var(--blue)" }, h("div", { style: "font-weight:600", text: "New tag " + code }), h("div", { class: "muted small", text: "Not on a roll yet." }),
@@ -1007,7 +1112,7 @@
         toast(e.name === "NotAllowedError" ? "Allow NFC for MakerVault Mobile, and turn NFC on in the phone's settings." : "NFC couldn't start: " + (e.message || e), true);
       }
     });
-    screen(header("Tap a tag", "Reading inside MakerVault Mobile"), h("main", null, ring, words, sub, card,
+    screen(header("Tap a tag", state.slotPick ? "Spool for " + state.slotPick.machineName + " · " + state.slotPick.label : "Reading inside MakerVault Mobile"), h("main", null, ring, words, sub, card,
       h("div", { style: "height:8px" }), start,
       h("label", { class: "check", style: "margin-top:10px" }, keep, "Keep listening (tap spool after spool)"),
       h("button", { class: "btn dashed wide", style: "margin-top:10px", onclick: () => { stopNfc(); go("#/nfc-write"); } }, "Write a tag for a roll…")), tabs("home"));
@@ -1042,8 +1147,36 @@
     const from = fromId ? tp.items.find(i => i.id === fromId) : null;
     const name = h("input", { class: "text", value: from ? from.title : "", maxlength: "200", "aria-label": "What did you print?", placeholder: "What did you print?" });
     const copies = h("input", { class: "text", value: String(from ? from.copies : 1), inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "Copies" });
-    const machine = h("select", { class: "text", "aria-label": "Machine" }, h("option", { value: "", text: "Any machine" }), ...mach.machines.map(m => h("option", { value: m.id, text: m.name })));
+    // Stage 15 (board 8): tap the printer, tick the slots it used (what's loaded now), type the grams; print time counts
+    // toward the printer's maintenance reminders.
+    const machine = { value: "" };
+    const chips = h("div", { class: "pchips" });
+    const slotBox = h("div");
+    const drawChips = () => {
+      chips.replaceChildren(...mach.machines.map(m => h("button", { class: "pchip" + (machine.value === m.id ? " on" : ""), "aria-pressed": machine.value === m.id ? "true" : "false",
+        onclick: () => { machine.value = machine.value === m.id ? "" : m.id; drawChips(); drawSlots(); dropBlank(); } }, m.name.replace(/^(Bambu Lab|Snapmaker) /, ""))));
+    };
+    const drawSlots = () => {
+      const m = mach.machines.find(x => x.id === machine.value);
+      const loaded = m ? m.slots.filter(x => x.filament) : [];
+      if (!m) { slotBox.replaceChildren(); return; }
+      if (!loaded.length) { slotBox.replaceChildren(h("div", { class: "note", style: "margin:8px 0", text: "Nothing is loaded in the " + m.name + " yet. Pick what's in each slot on Machines, or add the filament below." })); return; }
+      const usedLines = new Set(); // each To print line fills one slot only, even when two slots hold the same filament
+      slotBox.replaceChildren(h("div", { class: "box", style: "margin:8px 0 10px;padding:10px 12px" }, h("div", { class: "small", style: "color:var(--soft);margin-bottom:4px", text: "Which slots did it use? (loaded in the " + m.name.replace(/^(Bambu Lab|Snapmaker) /, "") + " now)" }),
+        ...loaded.map(x => {
+          const on = h("input", { type: "checkbox", "aria-label": "Used " + x.label });
+          const g = h("input", { class: "text", inputmode: "decimal", style: "width:72px;min-height:38px;text-align:right", "aria-label": x.label + " grams", placeholder: "g" });
+          const pre = from && from.lines.find((l, i) => l.filament === x.filament.id && !usedLines.has(i));
+          if (pre && firstDraw) { usedLines.add(from.lines.indexOf(pre)); on.checked = true; g.value = String(Math.round(pre.grams)); }
+          g.addEventListener("input", () => { if (g.value.trim()) on.checked = true; });
+          const row = h("div", { class: "slotrow slotuse" }, on, h("span", { class: "slabel", text: x.label }), swatch(x.filament.hex), h("span", { class: "mid", text: x.filament.name + " " + x.filament.material }), g, h("span", { class: "muted small", text: "g" }));
+          row.dataset.filament = x.filament.id;
+          return row;
+        })));
+    };
+    let firstDraw = true;
     if (from) { const m = mach.machines.find(x => x.name === from.machine); if (m) machine.value = m.id; }
+    const hours = h("input", { class: "text", value: "", inputmode: "decimal", style: "width:90px;text-align:center", "aria-label": "Print time for one copy, in hours", placeholder: "h" });
     const outcome = h("select", { class: "text", "aria-label": "How did it go?" }, h("option", { value: "done", text: "Finished" }), h("option", { value: "failed", text: "Failed" }), h("option", { value: "cancelled", text: "Cancelled" }));
     const percent = h("input", { class: "text", value: "50", inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "How far it got (%)" });
     const percentRow = h("label", { class: "field hidden" }, h("span", { text: "How far it got (%)" }), percent);
@@ -1056,11 +1189,23 @@
       const row = h("div", { class: "logline" }, sel, g, h("span", { class: "muted", text: "g" }), h("button", { class: "sq", "aria-label": "Remove this filament", onclick: () => row.remove() }, "×"));
       lines.append(row);
     };
-    if (from && from.lines.length) from.lines.forEach(l => addLine(l.filament, l.grams)); else addLine();
+    // A printer with loaded slots: the empty "Pick a filament…" line isn't needed (it comes back with "+ A filament that isn't loaded").
+    const dropBlank = () => { if (!loadedIds().length) return; for (const r of [...lines.children]) if (!r.querySelector("select").value && !r.querySelector("input").value.trim()) r.remove(); };
+    drawChips(); drawSlots(); firstDraw = false;
+    // Lines from the To print list that aren't loaded in the chosen printer still show as their own lines.
+    const loadedIds = () => { const m = mach.machines.find(x => x.id === machine.value); return m ? m.slots.filter(x => x.filament).map(x => x.filament.id) : []; };
+    if (from && from.lines.length) { const ids = loadedIds(); const rest = from.lines.filter(l => !ids.includes(l.filament)); rest.forEach(l => addLine(l.filament, l.grams)); if (!rest.length && !ids.length) addLine(); }
+    else if (!loadedIds().length) addLine();
     const save = h("button", { class: "btn primary wide", style: "margin-top:14px" }, "Log print");
     save.addEventListener("click", async () => {
+      const fromSlots = [...slotBox.querySelectorAll(".slotuse")].filter(r => r.querySelector("input[type=checkbox]").checked)
+        .map(r => ({ filament: r.dataset.filament, grams: parseFloat(r.querySelector("input.text").value.replace(",", ".")) || 0 }));
+      if (fromSlots.some(l => !l.grams)) { toast("Type the grams for each ticked slot (from the slicer).", true); return; }
+      const time = hours.value.trim() ? parseFloat(hours.value.replace(",", ".")) : 0;
+      if (hours.value.trim() && !(time >= 0 && time <= 720)) { toast("Print time: hours for one copy, e.g. 2.5", true); return; }
       const body = { title: name.value, copies: parseInt(copies.value, 10) || 1, machine: machine.value || null, outcome: outcome.value, percent: parseInt(percent.value, 10) || 0, fromToPrint: from ? from.id : null,
-        lines: [...lines.children].map(r => ({ filament: r.querySelector("select").value || null, grams: parseFloat(r.querySelector("input").value.replace(",", ".")) || 0 })) };
+        minutes: Math.round((time || 0) * 60),
+        lines: fromSlots.concat([...lines.children].map(r => ({ filament: r.querySelector("select").value || null, grams: parseFloat(r.querySelector("input").value.replace(",", ".")) || 0 }))) };
       if (!body.title.trim()) { toast("Give the print a name.", true); return; }
       save.disabled = true;
       try {
@@ -1071,10 +1216,11 @@
     });
     screen(header("Log a print", from ? "From your To print list" : "Filament comes off the rolls", { back: "#/home" }), h("main", null,
       h("label", { class: "field" }, h("span", { text: "What did you print?" }), name),
-      h("div", { style: "display:flex;gap:10px" }, h("label", { class: "field" }, h("span", { text: "Copies" }), copies), h("label", { class: "field", style: "flex:1" }, h("span", { text: "Machine" }), machine)),
-      h("label", { class: "field" }, h("span", { text: "How did it go?" }), outcome), percentRow,
-      h("div", { class: "muted small", style: "margin:6px 0", text: "Filament used (grams for all copies, from the slicer)" }), lines,
-      h("button", { class: "btn dashed wide", style: "margin-top:6px", onclick: () => addLine() }, "+ Another filament"),
+      mach.machines.length ? h("div", { class: "field" }, h("span", { text: "Printer" }), chips) : null, slotBox,
+      h("div", { style: "display:flex;gap:10px" }, h("label", { class: "field" }, h("span", { text: "Copies" }), copies), h("label", { class: "field", style: "flex:1" }, h("span", { text: "How did it go?" }), outcome),
+        h("label", { class: "field" }, h("span", { text: "Hours (1 copy)" }), hours)), percentRow,
+      h("div", { class: "muted small", style: "margin:6px 0", text: "Grams are for all copies, from the slicer. Hours count toward the printer's maintenance reminders." }), lines,
+      h("button", { class: "btn dashed wide", style: "margin-top:6px", onclick: () => addLine() }, "+ A filament that isn't loaded"),
       save,
       h("div", { class: "note small", style: "margin-top:14px", text: "It takes the grams off the open roll with the least left, like on the laptop. Logging from a sliced 3MF file (plates, colours) stays on the laptop." })), tabs("home"));
   }
@@ -1138,6 +1284,7 @@
     const [a, b, c] = parts;
     if (a !== "scan") stopCamera();
     if (a !== "nfc") stopNfc();
+    if (!["scan", "scan-photo", "nfc", "machine"].includes(a)) state.slotPick = null;
     try {
       if (!store.state.deviceId || a === "setup") { await setupScreen(); return; }
       if (a === "project" && b) await projectScreen(b);
@@ -1148,6 +1295,8 @@
       else if (a === "tag" && b) await tagScreen(b);
       else if (a === "supplies") await suppliesScreen(null);
       else if (a === "toprint") await toPrintScreen();
+      else if (a === "machines") await machinesScreen();
+      else if (a === "machine" && b) await machineScreen(b);
       else if (a === "shopping") await shoppingScreen();
       else if (a === "drawer" && b) await suppliesScreen(b);
       else if (a === "nfc-blank") blankTagScreen();
