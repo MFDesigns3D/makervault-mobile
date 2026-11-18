@@ -1818,6 +1818,97 @@ self.MV_TABLES = [
     ]
   },
   {
+    "name": "sliced_files",
+    "group": "printlog",
+    "label": "Sliced file",
+    "key": [
+      "file_key"
+    ],
+    "natural": null,
+    "columns": [
+      {
+        "name": "file_key",
+        "rule": "ask",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "name",
+        "rule": "quiet",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "project_id",
+        "rule": "quiet",
+        "ref": "projects",
+        "nullable": true,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "printer",
+        "rule": "quiet",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "nozzle",
+        "rule": "quiet",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "plates",
+        "rule": "quiet",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "file_modified_utc",
+        "rule": "quiet",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      },
+      {
+        "name": "read_utc",
+        "rule": "latest",
+        "ref": null,
+        "nullable": false,
+        "soft": false,
+        "percent": false,
+        "min": null,
+        "max": null
+      }
+    ]
+  },
+  {
     "name": "maintenance_tasks",
     "group": "machines",
     "label": "Maintenance",

@@ -59,6 +59,35 @@
   class ApiError extends Error { constructor(status, message, data) { super(message); this.status = status; this.data = data; } }
   const fail = (status, message, data) => { throw new ApiError(status, message, data); };
 
+  // Stage 16: "Chain links v3.gcode.3mf" → "Chain links v3"
+  const titleFrom = name => clean(String(name || "").replace(/\.gcode\.3mf$/i, "").replace(/\.3mf$/i, "").replace(/[_]+/g, " "));
+  // The printer a file was sliced for ("Bambu Lab H2C") → the machine with that model in its name.
+  const modelKey = t => String(t || "").toLowerCase().replace(/bambu\s*lab|snapmaker|prusa\s*research|creality|\(.*?\)|\d+(\.\d+)?\s*mm\s*nozzle|nozzle/g, " ").replace(/[^a-z0-9]+/g, "");
+  function machineFor(printer, machines) {
+    const k = modelKey(printer);
+    if (!k) return null;
+    return machines.find(m => modelKey(m.name) === k) || machines.find(m => { const n = modelKey(m.name); return n && (n.includes(k) || k.includes(n)); }) || null;
+  }
+  const matKey = m => String(m || "").toUpperCase().replace(/[^A-Z0-9]+/g, "");
+  const rgb = h => isHex(h) ? [1, 3, 5].map(i => parseInt(h.substr(i, 2), 16)) : [128, 128, 128];
+  const colourGap = (a, b) => { const x = rgb(a), y = rgb(b); return Math.sqrt(x.reduce((s, v, i) => s + (v - y[i]) ** 2, 0)); };
+  /**
+   * Stage 16: which loaded slot (or other filament) each of the file's filaments is. Same material first (PLA ↔ PLA
+   * Basic counts), then the closest colour; each slot is used once. Lines with no good match come back empty to pick.
+   *   lines: [{material, hex}]  slots: [{label, filament:{id, material, hex}}]  all: [{id, material, hex}]
+   */
+  function matchSliced(lines, slots, all) {
+    const used = new Set();
+    const same = (a, b) => { const x = matKey(a), y = matKey(b); return x && y && (x === y || x.startsWith(y) || y.startsWith(x) || materialGroup(a) === materialGroup(b) && materialGroup(a) !== "Other"); };
+    return lines.map(l => {
+      const loaded = slots.filter(x => x.filament && !used.has(x.label) && same(x.filament.material, l.material))
+        .map(x => ({ x, d: colourGap(x.filament.hex, l.hex) })).sort((p, q) => p.d - q.d)[0];
+      if (loaded && loaded.d <= 150) { used.add(loaded.x.label); return { slot: loaded.x.label, filament: loaded.x.filament.id }; }
+      const other = all.filter(f => same(f.material, l.material)).map(f => ({ f, d: colourGap(f.hex, l.hex) })).sort((p, q) => p.d - q.d)[0];
+      return { slot: null, filament: other && other.d <= 150 ? other.f.id : null };
+    });
+  }
+
   function createApi(getStore, changed, info) {
     // A phone set up before Stage 14 has no table yet for supply barcodes / makers: start them empty.
     const T = name => { const st = getStore(); return st.tables[name] || (st.tables[name] = {}); };
@@ -256,17 +285,22 @@
       const lines = (body.lines || []).filter(l => Number(l.grams) > 0).slice(0, 32);
       const id = E.newId();
       const machine = body.machine && T("machines")[body.machine] ? body.machine : null;
-      const project = body.project && T("projects")[body.project] ? body.project : null;
+      // Stage 16: logged from a sliced 3MF (Log a print › From a file): the file and plate are remembered like on the laptop,
+      // so the plate shows "logged already" everywhere and Printed before groups it with the laptop's prints of that file.
+      const sf = body.file && body.file.key && T("sliced_files")[body.file.key] ? T("sliced_files")[body.file.key] : null;
+      const platesNo = sf ? [...new Set((body.file.plates || []).map(int).filter(n => n > 0))].sort((x, y) => x - y).slice(0, 64) : [];
+      const project = body.project && T("projects")[body.project] ? body.project : sf && sf.project_id && T("projects")[sf.project_id] ? sf.project_id : null;
       const total = lines.reduce((s, l) => s + Number(l.grams), 0);
       const nowText = now();
-      T("print_jobs")[id] = { id, project_id: project, machine_id: machine, title: titleText, file_name: "", plates: "", copies: String(copies), outcome, percent: String(percent), reason: clean(body.reason || "").slice(0, 200),
-        minutes: String(Math.max(0, Math.min(60 * 24 * 30, Math.round(Number(body.minutes) || 0)))), grams: String(Math.round(total * 100) / 100), source: "manual", source_key: "", needs_check: "0", printed_utc: nowText, created_utc: nowText };
-      T("print_job_extra")[id] = { job_id: id, file_path: "", notes: clean(body.notes || "").slice(0, 2000), took: body.take === false ? "0" : "1", slicer_ids: lines.map(() => "0").join(",") };
+      T("print_jobs")[id] = { id, project_id: project, machine_id: machine, title: titleText, file_name: sf ? clean(sf.name).slice(0, 260) : "", plates: platesNo.join(", "), copies: String(copies), outcome, percent: String(percent), reason: clean(body.reason || "").slice(0, 200),
+        minutes: String(Math.max(0, Math.min(60 * 24 * 30, Math.round(Number(body.minutes) || 0)))), grams: String(Math.round(total * 100) / 100), source: sf ? "3mf" : "manual", source_key: "", needs_check: "0", printed_utc: nowText, created_utc: nowText };
+      T("print_job_extra")[id] = { job_id: id, file_path: "", notes: clean(body.notes || "").slice(0, 2000), took: body.take === false ? "0" : "1", slicer_ids: lines.map(l => String(Math.max(0, Math.min(999, int(l.slicerId))))).join(",") };
+      if (sf) for (const n of platesNo) T("print_job_plates")[sf.file_key + "\u001f" + n + "\u001f" + id] = { file_key: sf.file_key, plate: String(n), job_id: id };
       const notes = [];
       lines.forEach((l, i) => {
         const f = l.filament && T("filaments")[l.filament] ? filament(T("filaments")[l.filament]) : null;
         const line = i + 1;
-        T("print_job_filament")[id + "\u001f" + line] = { job_id: id, line: String(line), material: f ? f.material : clean(l.material || "PLA"), color_hex: f && isHex(f.hex) ? f.hex.toUpperCase() : "#808080", grams: String(Math.round(Number(l.grams) * 100) / 100), filament_id: f ? f.id : null };
+        T("print_job_filament")[id + "\u001f" + line] = { job_id: id, line: String(line), material: f ? f.material : clean(l.material || "PLA"), color_hex: f && isHex(f.hex) ? f.hex.toUpperCase() : isHex(l.hex) ? l.hex.toUpperCase() : "#808080", grams: String(Math.round(Number(l.grams) * 100) / 100), filament_id: f ? f.id : null };
         if (!f || body.take === false) return;
         const took = takeGrams(f, Number(l.grams), l.roll || null);
         took.takes.forEach((t, s) => { T("print_job_takes")[id + "\u001f" + line + "\u001f" + (s + 1)] = { job_id: id, line: String(line), seq: String(s + 1), filament_id: f.id, roll_id: t.roll, percent: String(t.percent), opened: t.opened ? "1" : "0" }; });
@@ -377,6 +411,27 @@
       return { notes, machine: T("machines")[t.machine_id] ? machineOut(T("machines")[t.machine_id]) : null };
     }
 
+    // ------------------------------------------------------------------ Stage 16: sliced 3MF files (read by the computers)
+    function slicedList() {
+      const logged = {};
+      for (const x of Object.values(T("print_job_plates"))) { const k = x.file_key + "\u001f" + int(x.plate); logged[k] = (logged[k] || 0) + 1; }
+      const projects = T("projects");
+      const machines = machineList();
+      return Object.values(T("sliced_files")).map(r => {
+        let ps; try { ps = JSON.parse(r.plates || "[]"); } catch (e) { ps = []; }
+        if (!Array.isArray(ps)) ps = [];
+        const plates = ps.filter(p => p && typeof p === "object" && int(p.n) > 0).slice(0, 64).map(p => ({
+          n: int(p.n), name: clean(String(p.name || "")) || "Plate " + int(p.n), seconds: Math.max(0, Number(p.s) || 0), grams: Math.max(0, Number(p.g) || 0),
+          filament: (Array.isArray(p.fil) ? p.fil : []).filter(f => f && typeof f === "object").slice(0, 32).map(f => ({ id: int(f.id), material: clean(String(f.m || "")), hex: isHex(f.c) ? f.c.toUpperCase() : "#808080", grams: Math.max(0, Number(f.g) || 0) })),
+          logged: logged[r.file_key + "\u001f" + int(p.n)] || 0,
+        }));
+        const pr = r.project_id && projects[r.project_id];
+        const m = machineFor(r.printer, machines);
+        return { key: r.file_key, name: r.name, title: titleFrom(r.name), project: pr ? pr.name : "", projectId: pr ? pr.id : null, printer: r.printer || "", nozzle: r.nozzle || "",
+          machine: m ? m.id : null, machineName: m ? m.name : "", modified: r.file_modified_utc || r.read_utc || "", plates };
+      }).filter(f => f.plates.length).sort((a, b) => (Date.parse(b.modified) || 0) - (Date.parse(a.modified) || 0) || a.name.localeCompare(b.name));
+    }
+
     function projectList() {
       const members = Object.values(T("project_group_members"));
       const groups = Object.values(T("project_groups"));
@@ -469,6 +524,7 @@
         return { drawers: drawers().map(d => ({ id: d.id, name: d.name })), categories: cats, makers, models };
       }
       if (a === "toprint" && !post) return toPrint();
+      if (a === "sliced" && !post) { const files = slicedList(); return s.length === 2 ? { file: files.find(f => f.key === s[1]) || fail(404, "That sliced file isn't in the library any more.") } : { files }; }
       if (a === "machines" && !post) { const list = machineList(); return { machines: list, due: list.reduce((n, m) => n + m.due, 0) }; }
       // Stage 15: one machine, change what's loaded in a slot, tick off a reminder.
       if (a === "machine" && s.length === 2 && !post) { const m = T("machines")[s[1]]; if (!m) fail(404, "That machine is not in your workshop any more."); return { machine: machineOut(m) }; }
@@ -552,5 +608,5 @@
     };
   }
 
-  root.MVStore = { createApi, ApiError, guessColour, nameKey };
+  root.MVStore = { createApi, ApiError, guessColour, nameKey, matchSliced, machineFor, titleFrom };
 })(typeof self !== "undefined" ? self : globalThis);

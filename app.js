@@ -1142,8 +1142,8 @@
   }
 
   // ------------------------------------------------------------------ log a print (filament comes off the rolls)
-  async function logScreen(fromId) {
-    const [fil, mach, tp] = await Promise.all([api("/api/filament"), api("/api/machines"), api("/api/toprint")]);
+  async function logScreen(fromId, typed) {
+    const [fil, mach, tp, sl] = await Promise.all([api("/api/filament"), api("/api/machines"), api("/api/toprint"), fromId ? Promise.resolve({ files: [] }) : api("/api/sliced").catch(() => ({ files: [] }))]);
     const from = fromId ? tp.items.find(i => i.id === fromId) : null;
     const name = h("input", { class: "text", value: from ? from.title : "", maxlength: "200", "aria-label": "What did you print?", placeholder: "What did you print?" });
     const copies = h("input", { class: "text", value: String(from ? from.copies : 1), inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "Copies" });
@@ -1215,6 +1215,7 @@
       } catch (e) { save.disabled = false; toast(e.message, true); }
     });
     screen(header("Log a print", from ? "From your To print list" : "Filament comes off the rolls", { back: "#/home" }), h("main", null,
+      !from && sl.files.length ? logTabs("type") : null,
       h("label", { class: "field" }, h("span", { text: "What did you print?" }), name),
       mach.machines.length ? h("div", { class: "field" }, h("span", { text: "Printer" }), chips) : null, slotBox,
       h("div", { style: "display:flex;gap:10px" }, h("label", { class: "field" }, h("span", { text: "Copies" }), copies), h("label", { class: "field", style: "flex:1" }, h("span", { text: "How did it go?" }), outcome),
@@ -1222,7 +1223,113 @@
       h("div", { class: "muted small", style: "margin:6px 0", text: "Grams are for all copies, from the slicer. Hours count toward the printer's maintenance reminders." }), lines,
       h("button", { class: "btn dashed wide", style: "margin-top:6px", onclick: () => addLine() }, "+ A filament that isn't loaded"),
       save,
-      h("div", { class: "note small", style: "margin-top:14px", text: "It takes the grams off the open roll with the least left, like on the laptop. Logging from a sliced 3MF file (plates, colours) stays on the laptop." })), tabs("home"));
+      h("div", { class: "note small", style: "margin-top:14px", text: "It takes the grams off the open roll with the least left, like on the laptop." + (sl.files.length ? "" : " Export sliced files (Ctrl+G in Bambu Studio) into your library and they'll show here under From a file, with the grams filled in.") })), tabs("home"));
+  }
+
+  // ------------------------------------------------------------------ Stage 16: log a print from a sliced 3MF (boards 9–10)
+  const timeText = sec => { const m = Math.round(sec / 60); return m < 60 ? m + " m" : Math.floor(m / 60) + " h " + String(m % 60).padStart(2, "0") + " m"; };
+  const shortMachine = n => (n || "").replace(/^(Bambu Lab|Snapmaker) /, "");
+  function logTabs(on) {
+    return h("div", { class: "seg", role: "group", "aria-label": "How to log it" },
+      h("button", { class: on === "file" ? "on" : "", "aria-pressed": on === "file" ? "true" : "false", onclick: () => go("#/log") }, "From a file"),
+      h("button", { class: on === "type" ? "on" : "", "aria-pressed": on === "type" ? "true" : "false", onclick: () => go("#/log/type") }, "Type it in"));
+  }
+  async function logPickScreen() {
+    const { files } = await api("/api/sliced");
+    if (!files.length) { await logScreen(null, true); return; }
+    let words = "";
+    const list = h("div");
+    const draw = () => {
+      const w = words.trim().toLowerCase();
+      const shown = files.filter(f => !w || (f.name + " " + f.project + " " + f.printer).toLowerCase().includes(w)).slice(0, 40);
+      list.replaceChildren(...(shown.length ? shown.map(f => h("div", { class: "box", style: "padding:10px 12px;margin-bottom:10px" },
+        h("div", { style: "display:flex;align-items:baseline;gap:8px" }, h("span", { style: "flex:1;font-weight:600;overflow-wrap:anywhere", text: f.title }), h("span", { class: "muted small", text: f.machineName ? shortMachine(f.machineName) : f.printer })),
+        f.project ? h("div", { class: "muted small", text: f.project }) : null,
+        ...f.plates.map(p => h("button", { class: "lrow", style: "min-height:46px", "aria-label": f.title + ", " + p.name + ", " + timeText(p.seconds) + ", " + Math.round(p.grams) + " grams", onclick: () => go("#/log-file/" + f.key + "/" + p.n) },
+          h("span", { style: "width:64px;font-size:13px;color:var(--soft)", text: p.name }),
+          h("span", { style: "display:flex;gap:3px;flex-wrap:wrap;max-width:90px" }, ...p.filament.map(x => swatch(x.hex))),
+          h("span", { style: "flex:1;text-align:right;font-size:13px;color:var(--soft)", text: timeText(p.seconds) + " · " + Math.round(p.grams) + " g" + (p.logged ? " · logged " + p.logged + "×" : "") }),
+          h("span", { class: "muted", text: "›" }))))) : [h("div", { class: "muted", style: "padding:8px 2px", text: "No sliced file matches “" + words + "”." })]));
+    };
+    draw();
+    screen(header("Log a print", "Pick the sliced file you printed", { back: "#/home" }), h("main", null, logTabs("file"),
+      searchBox("Search: chain, phone stand…", "", v => { words = v; draw(); }),
+      h("div", { class: "muted small", style: "margin:0 2px 8px", text: "Recent sliced files" }), list,
+      h("div", { class: "muted small", style: "margin-top:6px", text: "Only sliced 3MF files have grams: in Bambu Studio or Orca use Export plate sliced file (Ctrl+G) into a folder MakerVault watches. The laptop reads them and sends the numbers here; the files stay on Google Drive." })), tabs("home"));
+  }
+
+  async function fileLogScreen(key, plateNo) {
+    const [{ file }, fil, mach] = await Promise.all([api("/api/sliced/" + key), api("/api/filament"), api("/api/machines")]);
+    const plate = file.plates.find(p => p.n === plateNo);
+    if (!plate) throw new Error("That plate isn't in the file any more.");
+    const name = h("input", { class: "text", value: file.title + (file.plates.length > 1 || plate.name !== "Plate 1" ? " · " + plate.name : ""), maxlength: "200", "aria-label": "What did you print?" });
+    const machine = { value: file.machine || "" };
+    const chips = h("div", { class: "pchips" });
+    const rows = h("div");
+    const filamentSelect = (chosen, material) => {
+      const all = fil.filaments.slice().sort((a, b) => (window.MVStore.matchSliced([{ material, hex: "#808080" }], [], [a])[0].filament ? 0 : 1) - (window.MVStore.matchSliced([{ material, hex: "#808080" }], [], [b])[0].filament ? 0 : 1) || a.name.localeCompare(b.name));
+      const sel = h("select", { class: "text", style: "flex:1;min-width:0;min-height:38px", "aria-label": "Filament" }, h("option", { value: "", text: "Pick a filament…" }), ...all.map(f => h("option", { value: f.id, text: f.name + " " + f.material })));
+      sel.value = chosen || "";
+      return sel;
+    };
+    const drawRows = () => {
+      const m = mach.machines.find(x => x.id === machine.value);
+      const slots = m ? m.slots.filter(x => x.filament) : [];
+      const match = window.MVStore.matchSliced(plate.filament, slots, fil.filaments);
+      rows.replaceChildren(...plate.filament.map((l, i) => {
+        const on = h("input", { type: "checkbox", checked: true, "aria-label": "Used: " + l.material + " " + Math.round(l.grams) + " g" });
+        const sel = filamentSelect(match[i].filament, l.material);
+        const g = h("input", { class: "text", value: String(Math.round(l.grams * 10) / 10), inputmode: "decimal", style: "width:64px;min-height:38px;text-align:right", "aria-label": "Grams for one copy" });
+        const row = h("div", { class: "slotrow slotuse", style: "flex-wrap:wrap;padding:4px 0" }, on, h("span", { class: "slabel", text: match[i].slot || "—" }), swatch(l.hex), sel, g, h("span", { class: "muted small", text: "g" }));
+        row.dataset.slicer = String(l.id); row.dataset.material = l.material; row.dataset.hex = l.hex;
+        return row;
+      }));
+      if (!plate.filament.length) rows.replaceChildren(h("div", { class: "muted small", text: "The file didn't list its filament. Add it with Type it in." }));
+    };
+    const drawChips = () => chips.replaceChildren(...mach.machines.map(m => h("button", { class: "pchip" + (machine.value === m.id ? " on" : ""), "aria-pressed": machine.value === m.id ? "true" : "false",
+      onclick: () => { machine.value = machine.value === m.id ? "" : m.id; drawChips(); drawRows(); } }, shortMachine(m.name))));
+    drawChips(); drawRows();
+    const copies = h("input", { class: "text", value: "1", inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "Copies" });
+    const outcome = h("select", { class: "text", "aria-label": "How did it go?" }, h("option", { value: "done", text: "Finished" }), h("option", { value: "failed", text: "Failed" }), h("option", { value: "cancelled", text: "Cancelled" }));
+    const hours = h("input", { class: "text", value: String(Math.round(plate.seconds / 360) / 10), inputmode: "decimal", style: "width:80px;text-align:center", "aria-label": "Print time for one copy, in hours" });
+    const percent = h("input", { class: "text", value: "50", inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "How far it got (%)" });
+    const percentRow = h("label", { class: "field hidden" }, h("span", { text: "How far it got (%)" }), percent);
+    outcome.addEventListener("change", () => percentRow.classList.toggle("hidden", outcome.value === "done"));
+    const save = h("button", { class: "btn primary wide", style: "margin-top:14px" }, "Log print");
+    save.addEventListener("click", async () => {
+      const n = parseInt(copies.value, 10);
+      if (!(n >= 1 && n <= 1000)) { toast("Copies: 1 to 1000.", true); return; }
+      const pct = outcome.value === "done" ? 100 : parseInt(percent.value, 10);
+      if (!(pct >= 0 && pct <= 100)) { toast("How far it got: 0 to 100 %.", true); return; }
+      const time = hours.value.trim() ? parseFloat(hours.value.replace(",", ".")) : 0;
+      if (!(time >= 0 && time <= 720)) { toast("Print time: hours for one copy, e.g. 2.5", true); return; }
+      const share = n * pct / 100;
+      const used = [...rows.querySelectorAll(".slotuse")].filter(r => r.querySelector("input[type=checkbox]").checked);
+      const lines = [];
+      for (const r of used) {
+        const g = parseFloat(r.querySelector("input.text").value.replace(",", "."));
+        if (!(g >= 0 && g <= 100000)) { toast("Check the grams.", true); return; }
+        lines.push({ filament: r.querySelector("select").value || null, grams: Math.round(g * share * 100) / 100, slicerId: parseInt(r.dataset.slicer, 10) || 0, material: r.dataset.material, hex: r.dataset.hex });
+      }
+      if (!name.value.trim()) { toast("Give the print a name.", true); return; }
+      save.disabled = true;
+      try {
+        const r = await api("/api/log", { title: name.value, copies: n, machine: machine.value || null, outcome: outcome.value, percent: pct, minutes: Math.round(time * 60), project: file.projectId, file: { key: file.key, plates: [plate.n] }, lines });
+        toast(r.notes.length ? r.notes[0] : "Print logged");
+        go("#/home");
+      } catch (e) { save.disabled = false; toast(e.message, true); }
+    });
+    const picked = mach.machines.find(x => x.id === file.machine);
+    screen(header("Log a print", file.title + " · " + plate.name, { back: "#/log" }), h("main", null,
+      h("div", { class: "note", style: "margin:0 0 12px", text: "Filled in from the file: " + timeText(plate.seconds) + ", " + Math.round(plate.grams) + " g." + (picked ? " The " + shortMachine(picked.name) + " was picked because the file was sliced for it." : file.printer ? " Sliced for: " + file.printer + "." : "") }),
+      plate.logged ? h("div", { class: "note warn", style: "margin:0 0 12px", text: "This plate is in the print log already (" + plate.logged + "×). Logging it again adds another print." }) : null,
+      h("label", { class: "field" }, h("span", { text: "What did you print?" }), name),
+      mach.machines.length ? h("div", { class: "field" }, h("span", { text: "Printer" }), chips) : null,
+      h("div", { class: "box", style: "padding:10px 12px" }, h("div", { class: "small", style: "color:var(--soft);margin-bottom:4px", text: "Filament (matched to what's loaded)" }), rows),
+      h("div", { style: "display:flex;gap:10px" }, h("label", { class: "field" }, h("span", { text: "Copies" }), copies), h("label", { class: "field", style: "flex:1" }, h("span", { text: "How did it go?" }), outcome),
+        h("label", { class: "field" }, h("span", { text: "Hours" }), hours)), percentRow,
+      h("div", { class: "muted small", style: "margin:6px 0", text: "Grams and time are for 1 copy; copies multiply them. Failed partway? Pick Failed and the % — only that much comes off the rolls." }),
+      save), tabs("home"));
   }
 
   // ------------------------------------------------------------------ shopping list
@@ -1302,7 +1409,10 @@
       else if (a === "nfc-blank") blankTagScreen();
       else if (a === "nfc-write") await nfcWritePick();
       else if (a === "nfc") await nfcReadScreen();
-      else if (a === "log") await logScreen(b || null);
+      else if (a === "log" && b === "type") await logScreen(null, true);
+      else if (a === "log" && b) await logScreen(b);
+      else if (a === "log") await logPickScreen();
+      else if (a === "log-file" && b && c) await fileLogScreen(b, parseInt(c, 10));
       else if (a === "filament" && b) await filamentDetail(b);
       else if (a === "filament") await filamentScreen();
       else if (a === "add") await addScreen(b || "");
