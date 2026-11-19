@@ -89,8 +89,8 @@ main { flex: 1; padding: 0 18px 110px; }
 .muted { color: var(--muted); } .small { font-size: 12px; }
 ol.steps { margin: 0 0 16px; padding-left: 20px; color: var(--soft); line-height: 1.6; }
 
-label.field { display: block; margin-bottom: 12px; }
-label.field span { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+label.field, div.field { display: block; margin-bottom: 12px; }
+label.field span, div.field > span:first-child { display: block; color: var(--muted); font-size: 12px; margin-bottom: 4px; }
 input.text, textarea.text, select.text { width: 100%; min-height: 48px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--field); background: var(--card); font-size: 16px; outline: none; }
 input.text:focus, textarea.text:focus { border-color: var(--blue); }
 textarea.text { min-height: 90px; resize: vertical; }
@@ -247,3 +247,8 @@ select.text { width: 100%; min-height: 46px; border-radius: 10px; border: 1px so
 .pchips { display: flex; flex-wrap: wrap; gap: 6px; }
 .pchip { min-height: 42px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--field); background: var(--bg); color: var(--soft); }
 .pchip.on { background: var(--blue-bg); border-color: var(--blue); color: var(--blue-text); font-weight: 600; }
+
+/* Stage 16: ▼ ▲ beside whole-number boxes */
+.numarrows { display: flex; align-items: center; gap: 6px; }
+.numarrows .sq { width: 44px; height: 44px; flex: none; font-size: 15px; color: var(--soft); display: flex; align-items: center; justify-content: center; padding: 0; }
+.numarrows input.text { width: 72px; flex: none; text-align: center; }

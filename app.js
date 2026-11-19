@@ -229,13 +229,29 @@
       h("main", null, tileBox, searchBox("Search brand, colour…", state.filSearch, v => { state.filSearch = v; draw(); }), list), tabs("filament"));
   }
 
+  // Stage 16 (Mike: "up/down arrows everywhere"): ▼ and ▲ either side of a whole-number box. It stays a box you can type
+  // in; the keyboard's ↑ ↓ step it too; never outside min–max.
+  function arrows(input, min, max, step = 1) {
+    const bump = d => {
+      const n = parseInt(input.value, 10);
+      input.value = String(Math.min(max, Math.max(min, (isNaN(n) ? (d > 0 ? min - d : min) : n) + d)));
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    input.addEventListener("keydown", e => { if (e.key === "ArrowUp") { bump(step); e.preventDefault(); } else if (e.key === "ArrowDown") { bump(-step); e.preventDefault(); } });
+    const label = input.getAttribute("aria-label") || "number";
+    return h("span", { class: "numarrows" },
+      h("button", { type: "button", class: "sq", "aria-label": "Less: " + label, onclick: () => bump(-step) }, "▼"), input,
+      h("button", { type: "button", class: "sq", "aria-label": "More: " + label, onclick: () => bump(step) }, "▲"));
+  }
+
   function percentSheet(title, current, onPick) {
-    const input = h("input", { class: "text", type: "number", inputmode: "numeric", min: "0", max: "100", value: current === null || current === undefined ? "" : String(current), "aria-label": "Percent left" });
+    const input = h("input", { class: "text", inputmode: "numeric", maxlength: "3", value: current === null || current === undefined ? "" : String(current), "aria-label": "Percent left" });
     const close = () => back.remove();
     const pick = v => { if (!(v >= 0 && v <= 100)) { toast("Type a number from 0 to 100.", true); return; } close(); onPick(Math.round(v)); };
     const back = h("div", { class: "sheet-back", onclick: e => { if (e.target === back) close(); } },
       h("div", { class: "sheet", role: "dialog", "aria-label": title },
-        h("h3", { text: title }), input,
+        h("h3", { text: title }), arrows(input, 0, 100, 5),
         h("div", { class: "quick" }, [100, 75, 50, 25, 10, 0].map(v => h("button", { onclick: () => pick(v) }, v + "%"))),
         h("div", { class: "btns" }, h("button", { class: "btn ghost", onclick: close }, "Cancel"), h("button", { class: "btn primary", onclick: () => pick(parseFloat(input.value)) }, "Save"))));
     input.addEventListener("keydown", e => { if (e.key === "Enter") pick(parseFloat(input.value)); });
@@ -1146,7 +1162,7 @@
     const [fil, mach, tp, sl] = await Promise.all([api("/api/filament"), api("/api/machines"), api("/api/toprint"), fromId ? Promise.resolve({ files: [] }) : api("/api/sliced").catch(() => ({ files: [] }))]);
     const from = fromId ? tp.items.find(i => i.id === fromId) : null;
     const name = h("input", { class: "text", value: from ? from.title : "", maxlength: "200", "aria-label": "What did you print?", placeholder: "What did you print?" });
-    const copies = h("input", { class: "text", value: String(from ? from.copies : 1), inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "Copies" });
+    const copies = h("input", { class: "text", value: String(from ? from.copies : 1), inputmode: "numeric", "aria-label": "Copies" });
     // Stage 15 (board 8): tap the printer, tick the slots it used (what's loaded now), type the grams; print time counts
     // toward the printer's maintenance reminders.
     const machine = { value: "" };
@@ -1178,8 +1194,8 @@
     if (from) { const m = mach.machines.find(x => x.name === from.machine); if (m) machine.value = m.id; }
     const hours = h("input", { class: "text", value: "", inputmode: "decimal", style: "width:90px;text-align:center", "aria-label": "Print time for one copy, in hours", placeholder: "h" });
     const outcome = h("select", { class: "text", "aria-label": "How did it go?" }, h("option", { value: "done", text: "Finished" }), h("option", { value: "failed", text: "Failed" }), h("option", { value: "cancelled", text: "Cancelled" }));
-    const percent = h("input", { class: "text", value: "50", inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "How far it got (%)" });
-    const percentRow = h("label", { class: "field hidden" }, h("span", { text: "How far it got (%)" }), percent);
+    const percent = h("input", { class: "text", value: "50", inputmode: "numeric", "aria-label": "How far it got (%)" });
+    const percentRow = h("div", { class: "field hidden" }, h("span", { text: "How far it got (%)" }), arrows(percent, 0, 100, 5));
     outcome.addEventListener("change", () => percentRow.classList.toggle("hidden", outcome.value === "done"));
     const lines = h("div");
     const addLine = (filamentId, grams) => {
@@ -1218,8 +1234,9 @@
       !from && sl.files.length ? logTabs("type") : null,
       h("label", { class: "field" }, h("span", { text: "What did you print?" }), name),
       mach.machines.length ? h("div", { class: "field" }, h("span", { text: "Printer" }), chips) : null, slotBox,
-      h("div", { style: "display:flex;gap:10px" }, h("label", { class: "field" }, h("span", { text: "Copies" }), copies), h("label", { class: "field", style: "flex:1" }, h("span", { text: "How did it go?" }), outcome),
-        h("label", { class: "field" }, h("span", { text: "Hours (1 copy)" }), hours)), percentRow,
+      h("div", { style: "display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end" }, h("div", { class: "field" }, h("span", { text: "Copies" }), arrows(copies, 1, 1000)),
+        h("label", { class: "field" }, h("span", { text: "Hours (1 copy)" }), hours)),
+      h("label", { class: "field" }, h("span", { text: "How did it go?" }), outcome), percentRow,
       h("div", { class: "muted small", style: "margin:6px 0", text: "Grams are for all copies, from the slicer. Hours count toward the printer's maintenance reminders." }), lines,
       h("button", { class: "btn dashed wide", style: "margin-top:6px", onclick: () => addLine() }, "+ A filament that isn't loaded"),
       save,
@@ -1289,11 +1306,11 @@
     const drawChips = () => chips.replaceChildren(...mach.machines.map(m => h("button", { class: "pchip" + (machine.value === m.id ? " on" : ""), "aria-pressed": machine.value === m.id ? "true" : "false",
       onclick: () => { machine.value = machine.value === m.id ? "" : m.id; drawChips(); drawRows(); } }, shortMachine(m.name))));
     drawChips(); drawRows();
-    const copies = h("input", { class: "text", value: "1", inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "Copies" });
+    const copies = h("input", { class: "text", value: "1", inputmode: "numeric", "aria-label": "Copies" });
     const outcome = h("select", { class: "text", "aria-label": "How did it go?" }, h("option", { value: "done", text: "Finished" }), h("option", { value: "failed", text: "Failed" }), h("option", { value: "cancelled", text: "Cancelled" }));
     const hours = h("input", { class: "text", value: String(Math.round(plate.seconds / 360) / 10), inputmode: "decimal", style: "width:80px;text-align:center", "aria-label": "Print time for one copy, in hours" });
-    const percent = h("input", { class: "text", value: "50", inputmode: "numeric", style: "width:80px;text-align:center", "aria-label": "How far it got (%)" });
-    const percentRow = h("label", { class: "field hidden" }, h("span", { text: "How far it got (%)" }), percent);
+    const percent = h("input", { class: "text", value: "50", inputmode: "numeric", "aria-label": "How far it got (%)" });
+    const percentRow = h("div", { class: "field hidden" }, h("span", { text: "How far it got (%)" }), arrows(percent, 0, 100, 5));
     outcome.addEventListener("change", () => percentRow.classList.toggle("hidden", outcome.value === "done"));
     const save = h("button", { class: "btn primary wide", style: "margin-top:14px" }, "Log print");
     save.addEventListener("click", async () => {
@@ -1326,8 +1343,9 @@
       h("label", { class: "field" }, h("span", { text: "What did you print?" }), name),
       mach.machines.length ? h("div", { class: "field" }, h("span", { text: "Printer" }), chips) : null,
       h("div", { class: "box", style: "padding:10px 12px" }, h("div", { class: "small", style: "color:var(--soft);margin-bottom:4px", text: "Filament (matched to what's loaded)" }), rows),
-      h("div", { style: "display:flex;gap:10px" }, h("label", { class: "field" }, h("span", { text: "Copies" }), copies), h("label", { class: "field", style: "flex:1" }, h("span", { text: "How did it go?" }), outcome),
-        h("label", { class: "field" }, h("span", { text: "Hours" }), hours)), percentRow,
+      h("div", { style: "display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end" }, h("div", { class: "field" }, h("span", { text: "Copies" }), arrows(copies, 1, 1000)),
+        h("label", { class: "field" }, h("span", { text: "Hours" }), hours)),
+      h("label", { class: "field" }, h("span", { text: "How did it go?" }), outcome), percentRow,
       h("div", { class: "muted small", style: "margin:6px 0", text: "Grams and time are for 1 copy; copies multiply them. Failed partway? Pick Failed and the % — only that much comes off the rolls." }),
       save), tabs("home"));
   }
